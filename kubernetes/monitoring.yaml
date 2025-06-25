@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: browser-orchestrator
+  namespace: browser-sessions
+  labels:
+    app: browser-orchestrator
+spec:
+  selector:
+    matchLabels:
+      app: browser-orchestrator
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browser-orchestrator
+  namespace: browser-sessions
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: browser-orchestrator
+  template:
+    metadata:
+      labels:
+        app: browser-orchestrator
+    spec:
+      serviceAccountName: browser-orchestrator
+      containers:
+        - name: orchestrator
+          image: your-registry/browser-orchestrator:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: REDIS_HOST
+              value: "redis"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: K8S_NAMESPACE
+              value: "browser-sessions"
+            - name: BROWSER_IMAGE
+              value: "your-registry/your-browser:latest"
+            - name: MAX_SESSIONS
+              value: "100"
+            - name: SESSION_TIMEOUT
+              value: "1800"
+            - name: JOB_TTL_SECONDS
+              value: "3600"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
