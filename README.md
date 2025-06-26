@@ -84,6 +84,7 @@ curl http://localhost:3000/metrics
 ```
 
 ---
+```bash
 # scripts/monitor-deploy.sh
 #!/bin/bash
 
@@ -92,15 +93,16 @@ set -e
 echo "Deploying monitoring stack..."
 
 # Apply Prometheus configuration
-kubectl apply -f monitoring/prometheus.yaml
+kubectl apply -f monitoring/prometheus/
 
 # Apply Grafana configuration
-kubectl apply -f monitoring/grafana.yaml
+kubectl apply -f monitoring/grafana/
 
 # Apply alert rules
-kubectl apply -f monitoring/alerts.yaml
+kubectl apply -f monitoring/prometheus/alerts.yaml
 
 # Wait for deployments
+
 echo "Waiting for monitoring stack to be ready..."
 kubectl wait --for=condition=available --timeout=300s deployment/prometheus -n browser-sessions
 kubectl wait --for=condition=available --timeout=300s deployment/grafana -n browser-sessions
@@ -114,3 +116,4 @@ echo ""
 echo "Access Prometheus:"
 echo "kubectl port-forward service/prometheus 9090:9090 -n browser-sessions"
 echo "Then visit: http://localhost:9090"
+```
