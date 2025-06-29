@@ -6,15 +6,17 @@ echo "Deploying Browser Session Orchestrator..."
 
 # Build and push Docker image
 echo "Building Docker image..."
-docker build -t your-registry/browser-orchestrator:latest .
-docker push your-registry/browser-orchestrator:latest
+docker build -t browser-orchestrator:latest ./orchestrator/
+# docker push your-registry/browser-orchestrator:latest
 
 # Apply Kubernetes configurations
 echo "Applying Kubernetes configurations..."
 kubectl apply -f kubernetes/namespace.yaml
-kubectl apply -f kubernetes/rbac.yaml
-kubectl apply -f kubernetes/redis.yaml
-kubectl apply -f kubernetes/orchestrator.yaml
+kubectl apply -f kubernetes/rbac/*
+kubectl apply -f kubernetes/redis/*
+kubectl apply -f kubernetes/orchestrator/*
+kubectl apply -f kubernetes/monitoring/grafana/*
+kubectl apply -f kubernetes/monitoring/prometheus/*
 
 # Wait for deployments to be ready
 echo "Waiting for deployments to be ready..."

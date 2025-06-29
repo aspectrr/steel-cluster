@@ -1,13 +1,13 @@
-const fastify = require("fastify")({
-  logger: true,
-  requestTimeout: 300000, // 5 minute timeout for long operations
-});
+import Fastify from "fastify";
+import Redis from "redis";
+import k8s from "@kubernetes/client-node";
+import { v4 as uuidv4 } from "uuid";
+// import yaml from "js-yaml";
 
-const Redis = require("redis");
-const k8s = require("@kubernetes/client-node");
-const axios = require("axios");
-const { v4: uuidv4 } = require("uuid");
-const yaml = require("js-yaml");
+const fastify = Fastify({
+  logger: true,
+  requestTimeout: 300000,
+});
 
 // Environment configuration
 const config = {
@@ -390,8 +390,8 @@ class SessionManager {
 const sessionManager = new SessionManager(redis, k8sApi, k8sCoreApi, config);
 
 // Register plugins
-fastify.register(require("@fastify/cors"));
-fastify.register(require("@fastify/swagger"), {
+await fastify.register(import("@fastify/cors"));
+await fastify.register(import("@fastify/swagger"), {
   swagger: {
     info: {
       title: "Browser Session Orchestrator",
@@ -400,12 +400,27 @@ fastify.register(require("@fastify/swagger"), {
     },
   },
 });
-fastify.register(require("@fastify/swagger-ui"), {
+
+await fastify.register(import("@fastify/swagger-ui"), {
   routePrefix: "/docs",
   uiConfig: {
     docExpansion: "full",
     deepLinking: false,
   },
+  uiHooks: {
+    onRequest: function (request, reply, next) {
+      next();
+    },
+    preHandler: function (request, reply, next) {
+      next();
+    },
+  },
+  staticCSP: true,
+  transformStaticCSP: (header) => header,
+  transformSpecification: (swaggerObject, request, reply) => {
+    return swaggerObject;
+  },
+  transformSpecificationClone: true,
 });
 
 // API Routes
@@ -677,7 +692,7 @@ const start = async () => {
     console.log("Connected to Redis");
 
     // Start Fastify server
-    await fastify.listen({
+    fastify.listen({
       port: config.port,
       host: "0.0.0.0",
     });
