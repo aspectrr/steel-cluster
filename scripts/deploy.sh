@@ -12,12 +12,15 @@ docker build -t browser-orchestrator:latest ./orchestrator/
 # Apply Kubernetes configurations
 echo "Applying Kubernetes configurations..."
 kubectl apply -f kubernetes/namespace.yaml
-kubectl apply -f kubernetes/rbac/*
-kubectl apply -f kubernetes/redis/*
-kubectl apply -f kubernetes/orchestrator/*
-kubectl apply -f kubernetes/monitoring/grafana/*
-kubectl apply -f kubernetes/monitoring/prometheus/*
-
+kubectl apply -f kubernetes/rbac/
+kubectl apply -f kubernetes/redis/
+kubectl apply -f kubernetes/orchestrator/
+kubectl apply -f kubernetes/monitoring/grafana/
+kubectl apply -f kubernetes/monitoring/prometheus/
+kubectl apply -f kubernetes/ingress.yaml
+# Prometheus Service Monitors
+kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml
+kubectl apply -f kubernetes/monitoring.yaml
 # Wait for deployments to be ready
 echo "Waiting for deployments to be ready..."
 kubectl wait --for=condition=available --timeout=300s deployment/redis -n browser-sessions

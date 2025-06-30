@@ -1,27 +1,103 @@
-import Fastify from "fastify";
-import Redis from "redis";
-import k8s from "@kubernetes/client-node";
+import Fastify, {
+  FastifyInstance,
+  FastifyRequest,
+  FastifyReply,
+} from "fastify";
+import Redis, { RedisClientType } from "redis";
+import * as k8s from "@kubernetes/client-node";
 import { v4 as uuidv4 } from "uuid";
-// import yaml from "js-yaml";
+import axios, { AxiosResponse, Method } from "axios";
 
-const fastify = Fastify({
+// Type definitions
+interface Config {
+  port: number | string;
+  redis: {
+    host: string;
+    port: number;
+    password?: string | undefined;
+  };
+  kubernetes: {
+    namespace: string;
+    browserAPIImage: string;
+    browserUIImage: string;
+    browserAPIPort: number | string;
+    browserUIPort: number | string;
+    jobTtl: number | string;
+    podResources: {
+      requests: {
+        memory: string;
+        cpu: string;
+      };
+      limits: {
+        memory: string;
+        cpu: string;
+      };
+    };
+  };
+  session: {
+    defaultTimeout: number | string;
+    maxSessions: number | string;
+  };
+}
+
+interface SessionOptions {
+  timeout?: number;
+  [key: string]: any;
+}
+
+interface SessionData {
+  sessionId: string;
+  jobName: string;
+  status: "pending" | "running" | "failed";
+  createdAt: string;
+  lastUsed: string;
+  options: SessionOptions;
+  timeout: number;
+  podName?: string | undefined;
+  podIP?: string | undefined;
+}
+
+interface CreateSessionRequest {
+  timeout?: number;
+  options?: Record<string, any>;
+}
+
+interface SessionParams {
+  sessionId: string;
+}
+
+interface ProxyParams extends SessionParams {
+  "*": string;
+}
+
+interface HealthResponse {
+  healthy: boolean;
+  status?: number;
+  error?: string;
+}
+
+const fastify: FastifyInstance = Fastify({
   logger: true,
   requestTimeout: 300000,
 });
 
 // Environment configuration
-const config = {
+const config: Config = {
   port: process.env.PORT || 3000,
   redis: {
     host: process.env.REDIS_HOST || "localhost",
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD,
+    port: Number(process.env.REDIS_PORT) || 6379,
+    password: process.env.REDIS_PASSWORD || undefined,
   },
   kubernetes: {
     namespace: process.env.K8S_NAMESPACE || "default",
-    browserImage: process.env.BROWSER_IMAGE || "your-browser:latest",
-    browserPort: process.env.BROWSER_PORT || 8080,
-    jobTtl: process.env.JOB_TTL_SECONDS || 3600, // 1 hour
+    browserAPIImage:
+      process.env.BROWSER_API_IMAGE || "steel-dev/steel-browser-api:latest",
+    browserUIImage:
+      process.env.BROWSER_UI_IMAGE || "steel-dev/steel-browser-ui:latest",
+    browserAPIPort: Number(process.env.BROWSER_API_PORT) || 3000,
+    browserUIPort: Number(process.env.BROWSER_UI_PORT) || 5173,
+    jobTtl: Number(process.env.JOB_TTL_SECONDS) || 3600, // 1 hour
     podResources: {
       requests: {
         memory: process.env.POD_MEMORY_REQUEST || "512Mi",
@@ -34,18 +110,18 @@ const config = {
     },
   },
   session: {
-    defaultTimeout: process.env.SESSION_TIMEOUT || 1800, // 30 minutes
-    maxSessions: process.env.MAX_SESSIONS || 100,
+    defaultTimeout: Number(process.env.SESSION_TIMEOUT) || 1800, // 30 minutes
+    maxSessions: Number(process.env.MAX_SESSIONS) || 100,
   },
 };
 
 // Initialize Redis client
-const redis = Redis.createClient({
+const redis: RedisClientType = Redis.createClient({
   socket: {
     host: config.redis.host,
     port: config.redis.port,
   },
-  password: config.redis.password,
+  ...(config.redis.password && { password: config.redis.password }),
 });
 
 // Initialize Kubernetes client
@@ -61,7 +137,17 @@ const k8sCoreApi = kc.makeApiClient(k8s.CoreV1Api);
 
 // Session management class
 class SessionManager {
-  constructor(redisClient, k8sClient, coreApi, config) {
+  private redis: RedisClientType;
+  private k8s: k8s.BatchV1Api;
+  private k8sCore: k8s.CoreV1Api;
+  private config: Config;
+
+  constructor(
+    redisClient: RedisClientType,
+    k8sClient: k8s.BatchV1Api,
+    coreApi: k8s.CoreV1Api,
+    config: Config,
+  ) {
     this.redis = redisClient;
     this.k8s = k8sClient;
     this.k8sCore = coreApi;
@@ -69,30 +155,39 @@ class SessionManager {
   }
 
   // Create a new browser session
-  async createSession(options = {}) {
+  async createSession(options: SessionOptions = {}): Promise<string> {
     const sessionId = uuidv4();
     const jobName = `browser-session-${sessionId}`;
+    fastify.log.info(`Creating session ${sessionId}...`);
+    fastify.log.info(`Job ${jobName}`);
 
     try {
       // Check if we're at max capacity
       const activeCount = await this.getActiveSessionCount();
-      if (activeCount >= this.config.session.maxSessions) {
+      if (activeCount >= Number(this.config.session.maxSessions)) {
         throw new Error("Maximum session capacity reached");
       }
 
       // Create Kubernetes Job
       const job = this.createJobManifest(sessionId, jobName, options);
-      await this.k8s.createNamespacedJob(this.config.kubernetes.namespace, job);
+      fastify.log.info(`Job manifest ${job} created`);
+      const newJob = await this.k8s.createNamespacedJob(
+        this.config.kubernetes.namespace,
+        job,
+      );
+
+      fastify.log.info(`Job ${newJob} created`);
 
       // Store session data in Redis
-      const sessionData = {
+      const sessionData: SessionData = {
         sessionId,
         jobName,
         status: "pending",
         createdAt: new Date().toISOString(),
         lastUsed: new Date().toISOString(),
         options: options,
-        timeout: options.timeout || this.config.session.defaultTimeout,
+        timeout:
+          Number(options.timeout) || Number(this.config.session.defaultTimeout),
       };
 
       await this.redis.setEx(
@@ -113,7 +208,11 @@ class SessionManager {
   }
 
   // Wait for pod to be ready and update session data
-  async waitForPodReady(sessionId, jobName, maxRetries = 60) {
+  async waitForPodReady(
+    sessionId: string,
+    jobName: string,
+    maxRetries: number = 60,
+  ): Promise<void> {
     for (let i = 0; i < maxRetries; i++) {
       try {
         // Get pods for this job
@@ -130,7 +229,8 @@ class SessionManager {
           const pod = pods.body.items[0];
 
           if (
-            pod.status.phase === "Running" &&
+            pod &&
+            pod.status?.phase === "Running" &&
             pod.status.conditions?.some(
               (c) => c.type === "Ready" && c.status === "True",
             )
@@ -138,8 +238,8 @@ class SessionManager {
             // Update session with pod info
             const sessionData = await this.getSession(sessionId);
             sessionData.status = "running";
-            sessionData.podName = pod.metadata.name;
-            sessionData.podIP = pod.status.podIP;
+            sessionData.podName = pod.metadata?.name || undefined;
+            sessionData.podIP = pod.status.podIP || undefined;
 
             await this.redis.setEx(
               `session:${sessionId}`,
@@ -150,14 +250,18 @@ class SessionManager {
             return;
           }
 
-          if (pod.status.phase === "Failed") {
-            throw new Error(`Pod failed to start: ${pod.status.reason}`);
+          if (pod && pod.status?.phase === "Failed") {
+            throw new Error(
+              `Pod failed to start: ${pod.status.reason || "Unknown reason"}`,
+            );
           }
         }
 
         await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds
       } catch (error) {
-        if (i === maxRetries - 1) throw error;
+        if (i === maxRetries - 1) {
+          throw error;
+        }
         await new Promise((resolve) => setTimeout(resolve, 5000));
       }
     }
@@ -166,25 +270,29 @@ class SessionManager {
   }
 
   // Create Kubernetes Job manifest
-  createJobManifest(sessionId, jobName, options) {
+  createJobManifest(
+    sessionId: string,
+    jobName: string,
+    _options: SessionOptions,
+  ): k8s.V1Job {
     return {
       apiVersion: "batch/v1",
       kind: "Job",
       metadata: {
         name: jobName,
         labels: {
-          app: "headless-browser",
+          app: "steel-browser",
           "session-id": sessionId,
           component: "browser-session",
         },
       },
       spec: {
-        ttlSecondsAfterFinished: this.config.kubernetes.jobTtl,
+        ttlSecondsAfterFinished: Number(this.config.kubernetes.jobTtl),
         backoffLimit: 0,
         template: {
           metadata: {
             labels: {
-              app: "headless-browser",
+              app: "steel-browser",
               "session-id": sessionId,
               component: "browser-session",
             },
@@ -193,11 +301,13 @@ class SessionManager {
             restartPolicy: "Never",
             containers: [
               {
-                name: "browser",
-                image: this.config.kubernetes.browserImage,
+                name: "browser-api",
+                image: this.config.kubernetes.browserAPIImage,
                 ports: [
                   {
-                    containerPort: this.config.kubernetes.browserPort,
+                    containerPort: Number(
+                      this.config.kubernetes.browserAPIPort,
+                    ),
                   },
                 ],
                 env: [
@@ -225,16 +335,64 @@ class SessionManager {
                 resources: this.config.kubernetes.podResources,
                 readinessProbe: {
                   httpGet: {
-                    path: "/health",
-                    port: this.config.kubernetes.browserPort,
+                    path: "/v1/health",
+                    port: Number(this.config.kubernetes.browserAPIPort),
                   },
                   initialDelaySeconds: 10,
                   periodSeconds: 5,
                 },
                 livenessProbe: {
                   httpGet: {
-                    path: "/health",
-                    port: this.config.kubernetes.browserPort,
+                    path: "/v1/health",
+                    port: Number(this.config.kubernetes.browserAPIPort),
+                  },
+                  initialDelaySeconds: 30,
+                  periodSeconds: 10,
+                },
+              },
+              {
+                name: "browser-ui",
+                image: this.config.kubernetes.browserUIImage,
+                ports: [
+                  {
+                    containerPort: Number(this.config.kubernetes.browserUIPort),
+                  },
+                ],
+                env: [
+                  {
+                    name: "SESSION_ID",
+                    value: sessionId,
+                  },
+                  {
+                    name: "POD_NAME",
+                    valueFrom: {
+                      fieldRef: {
+                        fieldPath: "metadata.name",
+                      },
+                    },
+                  },
+                  {
+                    name: "POD_IP",
+                    valueFrom: {
+                      fieldRef: {
+                        fieldPath: "status.podIP",
+                      },
+                    },
+                  },
+                ],
+                resources: this.config.kubernetes.podResources,
+                readinessProbe: {
+                  httpGet: {
+                    path: "/",
+                    port: Number(this.config.kubernetes.browserUIPort),
+                  },
+                  initialDelaySeconds: 10,
+                  periodSeconds: 5,
+                },
+                livenessProbe: {
+                  httpGet: {
+                    path: "/",
+                    port: Number(this.config.kubernetes.browserUIPort),
                   },
                   initialDelaySeconds: 30,
                   periodSeconds: 10,
@@ -248,16 +406,16 @@ class SessionManager {
   }
 
   // Get session data from Redis
-  async getSession(sessionId) {
+  async getSession(sessionId: string): Promise<SessionData> {
     const data = await this.redis.get(`session:${sessionId}`);
     if (!data) {
       throw new Error("Session not found");
     }
-    return JSON.parse(data);
+    return JSON.parse(data) as SessionData;
   }
 
   // Update session last used timestamp
-  async updateSessionActivity(sessionId) {
+  async updateSessionActivity(sessionId: string): Promise<void> {
     const sessionData = await this.getSession(sessionId);
     sessionData.lastUsed = new Date().toISOString();
 
@@ -270,12 +428,12 @@ class SessionManager {
 
   // Proxy request to browser pod
   async proxyRequest(
-    sessionId,
-    path,
-    method = "GET",
-    data = null,
-    headers = {},
-  ) {
+    sessionId: string,
+    path: string,
+    method: Method = "GET",
+    data: any = null,
+    headers: Record<string, any> = {},
+  ): Promise<AxiosResponse> {
     const sessionData = await this.getSession(sessionId);
 
     if (sessionData.status !== "running" || !sessionData.podIP) {
@@ -285,7 +443,7 @@ class SessionManager {
     // Update activity
     await this.updateSessionActivity(sessionId);
 
-    const url = `http://${sessionData.podIP}:${this.config.kubernetes.browserPort}${path}`;
+    const url = `http://${sessionData.podIP}:${this.config.kubernetes.browserAPIPort}${path}`;
 
     try {
       const response = await axios({
@@ -300,7 +458,7 @@ class SessionManager {
       });
 
       return response;
-    } catch (error) {
+    } catch (error: any) {
       if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
         // Pod might be dead, mark session as failed
         sessionData.status = "failed";
@@ -315,7 +473,7 @@ class SessionManager {
   }
 
   // Clean up session and associated resources
-  async cleanupSession(sessionId) {
+  async cleanupSession(sessionId: string): Promise<boolean> {
     try {
       const sessionData = await this.getSession(sessionId);
 
@@ -331,7 +489,7 @@ class SessionManager {
             undefined,
             "Background", // Delete pods immediately
           );
-        } catch (error) {
+        } catch (error: any) {
           console.error(
             `Failed to delete job ${sessionData.jobName}:`,
             error.message,
@@ -343,22 +501,24 @@ class SessionManager {
       await this.redis.del(`session:${sessionId}`);
 
       return true;
-    } catch (error) {
+    } catch (error: any) {
       console.error(`Failed to cleanup session ${sessionId}:`, error.message);
       return false;
     }
   }
 
   // Get all active sessions
-  async getAllSessions() {
+  async getAllSessions(): Promise<SessionData[]> {
     const keys = await this.redis.keys("session:*");
-    const sessions = [];
+    const sessions: SessionData[] = [];
 
     for (const key of keys) {
       try {
         const data = await this.redis.get(key);
-        sessions.push(JSON.parse(data));
-      } catch (error) {
+        if (data) {
+          sessions.push(JSON.parse(data) as SessionData);
+        }
+      } catch (error: any) {
         console.error(
           `Failed to parse session data for ${key}:`,
           error.message,
@@ -370,17 +530,17 @@ class SessionManager {
   }
 
   // Get count of active sessions
-  async getActiveSessionCount() {
+  async getActiveSessionCount(): Promise<number> {
     const keys = await this.redis.keys("session:*");
     return keys.length;
   }
 
   // Health check for session
-  async checkSessionHealth(sessionId) {
+  async checkSessionHealth(sessionId: string): Promise<HealthResponse> {
     try {
       const response = await this.proxyRequest(sessionId, "/health", "GET");
       return { healthy: true, status: response.status };
-    } catch (error) {
+    } catch (error: any) {
       return { healthy: false, error: error.message };
     }
   }
@@ -417,7 +577,7 @@ await fastify.register(import("@fastify/swagger-ui"), {
   },
   staticCSP: true,
   transformStaticCSP: (header) => header,
-  transformSpecification: (swaggerObject, request, reply) => {
+  transformSpecification: (swaggerObject, _request, _reply) => {
     return swaggerObject;
   },
   transformSpecificationClone: true,
@@ -426,7 +586,9 @@ await fastify.register(import("@fastify/swagger-ui"), {
 // API Routes
 
 // Create new session
-fastify.post(
+fastify.post<{
+  Body: CreateSessionRequest;
+}>(
   "/sessions",
   {
     schema: {
@@ -437,6 +599,7 @@ fastify.post(
           timeout: {
             type: "number",
             description: "Session timeout in seconds",
+            default: 3000,
           },
           options: {
             type: "object",
@@ -456,15 +619,20 @@ fastify.post(
       },
     },
   },
-  async (request, reply) => {
+  async (
+    request: FastifyRequest<{ Body: CreateSessionRequest }>,
+    reply: FastifyReply,
+  ) => {
     try {
+      console.log("Creating session...");
+      console.log(request.body);
       const sessionId = await sessionManager.createSession(request.body || {});
       return {
         sessionId,
         status: "created",
         message: "Session created successfully",
       };
-    } catch (error) {
+    } catch (error: any) {
       reply.code(500);
       return { error: error.message };
     }
@@ -472,7 +640,9 @@ fastify.post(
 );
 
 // Get session status
-fastify.get(
+fastify.get<{
+  Params: SessionParams;
+}>(
   "/sessions/:sessionId/status",
   {
     schema: {
@@ -485,7 +655,10 @@ fastify.get(
       },
     },
   },
-  async (request, reply) => {
+  async (
+    request: FastifyRequest<{ Params: SessionParams }>,
+    reply: FastifyReply,
+  ) => {
     try {
       const sessionData = await sessionManager.getSession(
         request.params.sessionId,
@@ -498,7 +671,7 @@ fastify.get(
         ...sessionData,
         health,
       };
-    } catch (error) {
+    } catch (error: any) {
       reply.code(404);
       return { error: error.message };
     }
@@ -506,36 +679,46 @@ fastify.get(
 );
 
 // Proxy requests to browser
-fastify.all("/sessions/:sessionId/proxy/*", async (request, reply) => {
-  try {
-    const sessionId = request.params.sessionId;
-    const path = "/" + request.params["*"];
+fastify.all<{
+  Params: ProxyParams;
+}>(
+  "/sessions/:sessionId/proxy/*",
+  async (
+    request: FastifyRequest<{ Params: ProxyParams }>,
+    reply: FastifyReply,
+  ) => {
+    try {
+      const sessionId = request.params.sessionId;
+      const path = "/" + request.params["*"];
 
-    const response = await sessionManager.proxyRequest(
-      sessionId,
-      path,
-      request.method,
-      request.body,
-      request.headers,
-    );
+      const response = await sessionManager.proxyRequest(
+        sessionId,
+        path,
+        request.method as Method,
+        request.body,
+        request.headers as Record<string, any>,
+      );
 
-    // Forward response
-    reply.code(response.status);
-    Object.entries(response.headers).forEach(([key, value]) => {
-      if (key.toLowerCase() !== "content-length") {
-        reply.header(key, value);
-      }
-    });
+      // Forward response
+      reply.code(response.status);
+      Object.entries(response.headers).forEach(([key, value]) => {
+        if (key.toLowerCase() !== "content-length") {
+          reply.header(key, value as string);
+        }
+      });
 
-    return response.data;
-  } catch (error) {
-    reply.code(500);
-    return { error: error.message };
-  }
-});
+      return response.data;
+    } catch (error: any) {
+      reply.code(500);
+      return { error: error.message };
+    }
+  },
+);
 
 // Delete session
-fastify.delete(
+fastify.delete<{
+  Params: SessionParams;
+}>(
   "/sessions/:sessionId",
   {
     schema: {
@@ -548,7 +731,10 @@ fastify.delete(
       },
     },
   },
-  async (request, reply) => {
+  async (
+    request: FastifyRequest<{ Params: SessionParams }>,
+    reply: FastifyReply,
+  ) => {
     try {
       const success = await sessionManager.cleanupSession(
         request.params.sessionId,
@@ -559,7 +745,7 @@ fastify.delete(
           ? "Session deleted successfully"
           : "Failed to delete session",
       };
-    } catch (error) {
+    } catch (error: any) {
       reply.code(500);
       return { error: error.message };
     }
@@ -574,14 +760,14 @@ fastify.get(
       description: "List all active sessions",
     },
   },
-  async (request, reply) => {
+  async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const sessions = await sessionManager.getAllSessions();
       return {
         sessions,
         count: sessions.length,
       };
-    } catch (error) {
+    } catch (error: any) {
       reply.code(500);
       return { error: error.message };
     }
@@ -589,7 +775,7 @@ fastify.get(
 );
 
 // Health check endpoint
-fastify.get("/health", async (request, reply) => {
+fastify.get("/health", async (request: FastifyRequest, reply: FastifyReply) => {
   try {
     await redis.ping();
     return {
@@ -597,7 +783,7 @@ fastify.get("/health", async (request, reply) => {
       timestamp: new Date().toISOString(),
       activeSessions: await sessionManager.getActiveSessionCount(),
     };
-  } catch (error) {
+  } catch (error: any) {
     reply.code(500);
     return {
       status: "unhealthy",
@@ -607,15 +793,21 @@ fastify.get("/health", async (request, reply) => {
 });
 
 // Metrics endpoint (Prometheus format)
-fastify.get("/metrics", async (request, reply) => {
-  try {
-    const sessions = await sessionManager.getAllSessions();
-    const activeCount = sessions.length;
-    const runningCount = sessions.filter((s) => s.status === "running").length;
-    const pendingCount = sessions.filter((s) => s.status === "pending").length;
-    const failedCount = sessions.filter((s) => s.status === "failed").length;
+fastify.get(
+  "/metrics",
+  async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const sessions = await sessionManager.getAllSessions();
+      const activeCount = sessions.length;
+      const runningCount = sessions.filter(
+        (s) => s.status === "running",
+      ).length;
+      const pendingCount = sessions.filter(
+        (s) => s.status === "pending",
+      ).length;
+      const failedCount = sessions.filter((s) => s.status === "failed").length;
 
-    const metrics = `
+      const metrics = `
 # HELP browser_sessions_total Total number of browser sessions
 # TYPE browser_sessions_total gauge
 browser_sessions_total ${activeCount}
@@ -633,13 +825,14 @@ browser_sessions_pending ${pendingCount}
 browser_sessions_failed ${failedCount}
     `.trim();
 
-    reply.type("text/plain");
-    return metrics;
-  } catch (error) {
-    reply.code(500);
-    return `# Error generating metrics: ${error.message}`;
-  }
-});
+      reply.type("text/plain");
+      return metrics;
+    } catch (error: any) {
+      reply.code(500);
+      return `# Error generating metrics: ${error.message}`;
+    }
+  },
+);
 
 // Background cleanup task
 setInterval(async () => {
@@ -649,7 +842,7 @@ setInterval(async () => {
 
     for (const session of sessions) {
       const lastUsed = new Date(session.lastUsed);
-      const ageMinutes = (now - lastUsed) / (1000 * 60);
+      const ageMinutes = (now.getTime() - lastUsed.getTime()) / (1000 * 60);
 
       // Cleanup sessions that haven't been used for longer than their timeout
       if (ageMinutes > session.timeout / 60) {
@@ -657,13 +850,13 @@ setInterval(async () => {
         await sessionManager.cleanupSession(session.sessionId);
       }
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error("Background cleanup error:", error.message);
   }
 }, 60000); // Run every minute
 
 // Graceful shutdown
-const gracefulShutdown = async () => {
+const gracefulShutdown = async (): Promise<void> => {
   console.log("Shutting down gracefully...");
 
   try {
@@ -675,7 +868,7 @@ const gracefulShutdown = async () => {
 
     console.log("Shutdown complete");
     process.exit(0);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error during shutdown:", error);
     process.exit(1);
   }
@@ -685,21 +878,21 @@ process.on("SIGTERM", gracefulShutdown);
 process.on("SIGINT", gracefulShutdown);
 
 // Start server
-const start = async () => {
+const start = async (): Promise<void> => {
   try {
     // Connect to Redis
     await redis.connect();
     console.log("Connected to Redis");
 
     // Start Fastify server
-    fastify.listen({
-      port: config.port,
+    await fastify.listen({
+      port: Number(config.port),
       host: "0.0.0.0",
     });
 
     console.log(`Server listening on port ${config.port}`);
     console.log(`API docs available at http://localhost:${config.port}/docs`);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Failed to start server:", error);
     process.exit(1);
   }

@@ -4,7 +4,7 @@ metadata:
   name: browser-orchestrator
   namespace: browser-sessions
 spec:
-  replicas: 2
+  replicas: 1 # 2
   selector:
     matchLabels:
       app: browser-orchestrator
@@ -16,7 +16,8 @@ spec:
       serviceAccountName: browser-orchestrator
       containers:
         - name: orchestrator
-          image: your-registry/browser-orchestrator:latest
+          image: browser-orchestrator:latest
+          imagePullPolicy: Never # Local development
           ports:
             - containerPort: 3000
           env:
@@ -29,7 +30,7 @@ spec:
             - name: K8S_NAMESPACE
               value: "browser-sessions"
             - name: BROWSER_IMAGE
-              value: "your-registry/your-browser:latest"
+              value: "steel-dev/steel-browser:latest"
             - name: MAX_SESSIONS
               value: "100"
             - name: SESSION_TIMEOUT
