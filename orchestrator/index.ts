@@ -20,6 +20,7 @@ interface Config {
     namespace: string;
     browserAPIImage: string;
     browserUIImage: string;
+    apiURL: string;
     browserAPIPort: number | string;
     browserUIPort: number | string;
     jobTtl: number | string;
@@ -90,13 +91,16 @@ const config: Config = {
     password: process.env.REDIS_PASSWORD || undefined,
   },
   kubernetes: {
-    namespace: process.env.K8S_NAMESPACE || "default",
+    namespace: process.env.K8S_NAMESPACE || "browser-sessions",
     browserAPIImage:
-      process.env.BROWSER_API_IMAGE || "steel-dev/steel-browser-api:latest",
+      process.env.BROWSER_API_IMAGE ||
+      "ghcr.io/steel-dev/steel-browser-api:latest",
     browserUIImage:
-      process.env.BROWSER_UI_IMAGE || "steel-dev/steel-browser-ui:latest",
+      process.env.BROWSER_UI_IMAGE ||
+      "ghcr.io/steel-dev/steel-browser-ui:latest",
+    apiURL: process.env.API_URL || "http://localhost:3000",
     browserAPIPort: Number(process.env.BROWSER_API_PORT) || 3000,
-    browserUIPort: Number(process.env.BROWSER_UI_PORT) || 5173,
+    browserUIPort: Number(process.env.BROWSER_UI_PORT) || 80,
     jobTtl: Number(process.env.JOB_TTL_SECONDS) || 3600, // 1 hour
     podResources: {
       requests: {
@@ -364,6 +368,10 @@ class SessionManager {
                     value: sessionId,
                   },
                   {
+                    name: "API_URL",
+                    value: this.config.kubernetes.apiURL,
+                  },
+                  {
                     name: "POD_NAME",
                     valueFrom: {
                       fieldRef: {
@@ -381,22 +389,22 @@ class SessionManager {
                   },
                 ],
                 resources: this.config.kubernetes.podResources,
-                readinessProbe: {
-                  httpGet: {
-                    path: "/",
-                    port: Number(this.config.kubernetes.browserUIPort),
-                  },
-                  initialDelaySeconds: 10,
-                  periodSeconds: 5,
-                },
-                livenessProbe: {
-                  httpGet: {
-                    path: "/",
-                    port: Number(this.config.kubernetes.browserUIPort),
-                  },
-                  initialDelaySeconds: 30,
-                  periodSeconds: 10,
-                },
+                // readinessProbe: {
+                //   httpGet: {
+                //     path: "/",
+                //     port: Number(this.config.kubernetes.browserUIPort),
+                //   },
+                //   initialDelaySeconds: 10,
+                //   periodSeconds: 5,
+                // },
+                // livenessProbe: {
+                //   httpGet: {
+                //     path: "/",
+                //     port: Number(this.config.kubernetes.browserUIPort),
+                //   },
+                //   initialDelaySeconds: 30,
+                //   periodSeconds: 10,
+                // },
               },
             ],
           },
@@ -538,7 +546,7 @@ class SessionManager {
   // Health check for session
   async checkSessionHealth(sessionId: string): Promise<HealthResponse> {
     try {
-      const response = await this.proxyRequest(sessionId, "/health", "GET");
+      const response = await this.proxyRequest(sessionId, "/v1/health", "GET");
       return { healthy: true, status: response.status };
     } catch (error: any) {
       return { healthy: false, error: error.message };
@@ -682,7 +690,7 @@ fastify.get<{
 fastify.all<{
   Params: ProxyParams;
 }>(
-  "/sessions/:sessionId/proxy/*",
+  "/sessions/:sessionId/*",
   async (
     request: FastifyRequest<{ Params: ProxyParams }>,
     reply: FastifyReply,
@@ -690,6 +698,7 @@ fastify.all<{
     try {
       const sessionId = request.params.sessionId;
       const path = "/" + request.params["*"];
+      fastify.log.info(request.params);
 
       const response = await sessionManager.proxyRequest(
         sessionId,
