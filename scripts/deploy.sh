@@ -7,7 +7,7 @@ echo "Deploying Browser Session Orchestrator..."
 # Build and push Docker image
 echo "Building Docker image..."
 docker build -t browser-orchestrator:latest ./orchestrator/
-# docker push your-registry/browser-orchestrator:latest
+# docker push ghcr.io/browser-orchestrator:latest
 
 # Apply Kubernetes configurations
 echo "Applying Kubernetes configurations..."
@@ -17,10 +17,11 @@ kubectl apply -f kubernetes/redis/
 kubectl apply -f kubernetes/orchestrator/
 kubectl apply -f kubernetes/monitoring/grafana/
 kubectl apply -f kubernetes/monitoring/prometheus/
-kubectl apply -f kubernetes/ingress.yaml
 # Prometheus Service Monitors
 kubectl apply -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml
 kubectl apply -f kubernetes/monitoring.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.1/deploy/static/provider/cloud/deploy.yaml
+kubectl apply -f kubernetes/ingress.yaml
 # Wait for deployments to be ready
 echo "Waiting for deployments to be ready..."
 kubectl wait --for=condition=available --timeout=300s deployment/redis -n browser-sessions
@@ -34,11 +35,13 @@ kubectl get services -n browser-sessions
 
 echo ""
 echo "To test the API locally:"
-echo "kubectl port-forward service/browser-orchestrator 3000:80 -n browser-sessions"
-echo "Then visit: http://localhost:3000/docs"
+echo "Visit: http://localhost/docs"
 echo ""
 echo "To test Grafana:"
-echo "kubectl port-forward service/grafana 3000:3000 -n browser-sessions"
-echo "Then visit: http://localhost:3000"
+echo "Then visit: http://localhost/grafana"
 echo "username: admin"
 echo "password: admin123"
+echo ""
+echo "To test Prometheus:"
+echo "Then visit: http://localhost/prometheus"
+echo ""

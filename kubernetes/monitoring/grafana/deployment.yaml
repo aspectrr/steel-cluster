@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: grafana
-          image: grafana/grafana:9.5.0
+          image: grafana/grafana:12.0.2
           ports:
             - containerPort: 3000
           env:
@@ -23,6 +23,10 @@ spec:
               value: "admin123"
             - name: GF_INSTALL_PLUGINS
               value: "grafana-piechart-panel"
+            - name: GF_SERVER_ROOT_URL
+              value: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
           volumeMounts:
             - name: grafana-datasources
               mountPath: /etc/grafana/provisioning/datasources

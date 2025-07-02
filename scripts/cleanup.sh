@@ -11,6 +11,9 @@ kubectl delete -f kubernetes/redis/
 kubectl delete -f kubernetes/rbac/
 kubectl delete -f kubernetes/monitoring/grafana/
 kubectl delete -f kubernetes/monitoring/prometheus/
+kubectl delete -f kubernetes/ingress.yaml
+kubectl delete -f kubernetes/monitoring.yaml
+kubectl delete -f kubernetes/namespace.yaml
 kubectl delete jobs --all --all-namespaces
 
 echo "Cleanup complete!"
