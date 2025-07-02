@@ -647,6 +647,173 @@ fastify.post<{
   },
 );
 
+// Get session UI
+fastify.get<{
+  Params: SessionParams;
+}>(
+  "/sessions/:sessionId",
+  {
+    schema: {
+      description: "Get session UI",
+      params: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string" },
+        },
+      },
+    },
+  },
+  async (
+    request: FastifyRequest<{ Params: SessionParams }>,
+    reply: FastifyReply,
+  ) => {
+    try {
+      const sessionData = await sessionManager.getSession(
+        request.params.sessionId,
+      );
+
+      if (sessionData.status !== "running" || !sessionData.podIP) {
+        reply.type("text/html");
+        return `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Session ${request.params.sessionId}</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; text-align: center; }
+        .status { padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .pending { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; }
+        .failed { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+        .loading { animation: spin 1s linear infinite; display: inline-block; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+    <script>
+        setTimeout(() => location.reload(), 2000);
+    </script>
+</head>
+<body>
+    <h1>Browser Session</h1>
+    <div class="status ${sessionData.status}">
+        <div class="loading">⟳</div>
+        <p>Session Status: <strong>${sessionData.status.toUpperCase()}</strong></p>
+        <p>Session ID: ${request.params.sessionId}</p>
+        ${sessionData.status === "pending" ? "<p>Session is starting up, please wait...</p>" : ""}
+        ${sessionData.status === "failed" ? "<p>Session failed to start. Please try creating a new session.</p>" : ""}
+    </div>
+</body>
+</html>`;
+      }
+
+      // Update activity
+      await sessionManager.updateSessionActivity(request.params.sessionId);
+
+      // Serve the UI via iframe pointing to the pod's UI port
+      const uiUrl = `http://${sessionData.podIP}:${config.kubernetes.browserUIPort}`;
+
+      reply.type("text/html");
+      return `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Browser Session ${request.params.sessionId}</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        .header {
+            background: #f8f9fa;
+            padding: 10px 20px;
+            border-bottom: 1px solid #dee2e6;
+            font-size: 14px;
+            color: #495057;
+        }
+        .session-info {
+            display: inline-block;
+            margin-right: 20px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #28a745;
+            margin-right: 5px;
+        }
+        iframe {
+            width: 100%;
+            height: calc(100vh - 50px);
+            border: none;
+            display: block;
+        }
+        .error {
+            padding: 20px;
+            text-align: center;
+            color: #721c24;
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            margin: 20px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="session-info">
+            <span class="status-indicator"></span>
+            Session: ${request.params.sessionId}
+        </div>
+        <div class="session-info">
+            Pod: ${sessionData.podName}
+        </div>
+        <div class="session-info">
+            Status: Running
+        </div>
+    </div>
+    <iframe src="${uiUrl}"
+            title="Browser Session UI"
+            allow="camera; microphone; fullscreen; autoplay"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation">
+        <div class="error">
+            <h3>Unable to load browser interface</h3>
+            <p>Your browser doesn't support iframes or the session UI is not responding.</p>
+            <p><a href="${uiUrl}" target="_blank">Open in new window</a></p>
+        </div>
+    </iframe>
+</body>
+</html>`;
+    } catch (error: any) {
+      reply.code(404).type("text/html");
+      return `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Session Not Found</title>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; text-align: center; }
+        .error { color: #721c24; background: #f8d7da; padding: 20px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="error">
+        <h1>Session Not Found</h1>
+        <p>Session ID: ${request.params.sessionId}</p>
+        <p>${error.message}</p>
+    </div>
+</body>
+</html>`;
+    }
+  },
+);
+
 // Get session status
 fastify.get<{
   Params: SessionParams;
