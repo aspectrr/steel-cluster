@@ -4,7 +4,7 @@ metadata:
   name: browser-orchestrator
   namespace: browser-sessions
 spec:
-  replicas: 1 # 2
+  # replicas: 1 # 2
   selector:
     matchLabels:
       app: browser-orchestrator
@@ -30,7 +30,9 @@ spec:
             - name: K8S_NAMESPACE
               value: "browser-sessions"
             - name: BROWSER_IMAGE
-              value: "steel-dev/steel-browser:latest"
+              value: "ghcr.io/steel-dev/steel-browser:latest"
+            - name: PREWARM_POOL_SIZE
+              value: "2"
             - name: MAX_SESSIONS
               value: "100"
             - name: SESSION_TIMEOUT

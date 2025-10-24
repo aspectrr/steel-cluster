@@ -17,7 +17,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM node:18-alpine AS production
+FROM node:24-bullseye-slim AS production
 
 WORKDIR /app
 
@@ -31,8 +31,11 @@ RUN npm ci --only=production && npm cache clean --force
 COPY --from=builder /app/dist ./dist
 
 # Create non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S orchestrator -u 1001
+RUN groupadd -g 1001 nodejs && \
+    useradd -r -u 1001 -g nodejs orchestrator
+
+RUN apt-get update && apt-get install -y curl
+
 
 # Change ownership
 RUN chown -R orchestrator:nodejs /app

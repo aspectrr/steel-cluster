@@ -1,1077 +1,942 @@
 import Fastify, {
   FastifyInstance,
-  FastifyRequest,
   FastifyReply,
+  FastifyRequest,
 } from "fastify";
+import replyFrom from "@fastify/reply-from";
 import Redis, { RedisClientType } from "redis";
-import * as k8s from "@kubernetes/client-node";
+import axios from "axios";
 import { v4 as uuidv4 } from "uuid";
-import axios, { AxiosResponse, Method } from "axios";
+import {
+  CoreV1Api,
+  KubeConfig,
+  V1Pod,
+  V1Service,
+  V1ContainerPort,
+  V1Probe,
+  V1HTTPGetAction,
+} from "@kubernetes/client-node";
 
-// Type definitions
-interface Config {
-  port: number | string;
-  redis: {
-    host: string;
-    port: number;
-    password?: string | undefined;
-  };
-  kubernetes: {
-    namespace: string;
-    browserAPIImage: string;
-    browserUIImage: string;
-    apiURL: string;
-    browserAPIPort: number | string;
-    browserUIPort: number | string;
-    jobTtl: number | string;
-    podResources: {
-      requests: {
-        memory: string;
-        cpu: string;
-      };
-      limits: {
-        memory: string;
-        cpu: string;
-      };
-    };
-  };
-  session: {
-    defaultTimeout: number | string;
-    maxSessions: number | string;
-  };
-}
+// =========================
+/* Environment / Configuration */
+// =========================
 
-interface SessionOptions {
-  timeout?: number;
-  [key: string]: any;
-}
+const PORT = Number(process.env.PORT || 3000);
+
+const REDIS_HOST = process.env.REDIS_HOST || "localhost";
+const REDIS_PORT = Number(process.env.REDIS_PORT || 6379);
+const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
+
+const K8S_NAMESPACE = process.env.K8S_NAMESPACE || "browser-sessions";
+
+// Browser container image and port
+const BROWSER_IMAGE =
+  process.env.BROWSER_IMAGE || "ghcr.io/steel-dev/steel-browser:latest";
+const BROWSER_PORT = Number(process.env.BROWSER_PORT || 3000);
+const RAW_BASE_PATH = process.env.BASE_PATH || "";
+const BASE_PATH =
+  RAW_BASE_PATH === "/" ? "" : RAW_BASE_PATH.replace(/\/+$/, "");
+
+// Session parameters
+const SESSION_TIMEOUT_DEFAULT = Number(process.env.SESSION_TIMEOUT || 1800); // seconds
+const MAX_SESSIONS = Number(process.env.MAX_SESSIONS || 100);
+
+// Prewarm pool
+const PREWARM_POOL_SIZE = Number(process.env.PREWARM_POOL_SIZE || 2);
+
+// Resource requests/limits (optional)
+const POD_MEMORY_REQUEST = process.env.POD_MEMORY_REQUEST || "256Mi";
+const POD_CPU_REQUEST = process.env.POD_CPU_REQUEST || "200m";
+const POD_MEMORY_LIMIT = process.env.POD_MEMORY_LIMIT || "512Mi";
+const POD_CPU_LIMIT = process.env.POD_CPU_LIMIT || "500m";
+
+// Optional image pull secret
+const IMAGE_PULL_SECRET = process.env.IMAGE_PULL_SECRET;
+
+// Readiness probe timing
+const READINESS_INITIAL_DELAY = Number(
+  process.env.READINESS_INITIAL_DELAY || 3,
+);
+const READINESS_PERIOD_SECONDS = Number(
+  process.env.READINESS_PERIOD_SECONDS || 5,
+);
+const READINESS_TIMEOUT_SECONDS = Number(
+  process.env.READINESS_TIMEOUT_SECONDS || 60,
+);
+
+// Janitor tuning
+const JANITOR_INTERVAL_MS = Number(process.env.JANITOR_INTERVAL_MS || 15000);
+const PREWARM_CHECK_INTERVAL_MS = Number(
+  process.env.PREWARM_CHECK_INTERVAL_MS || 20000,
+);
+
+// =========================
+/* Types */
+// =========================
+
+type SessionStatus = "pending" | "running" | "failed";
 
 interface SessionData {
   sessionId: string;
-  jobName: string;
-  status: "pending" | "running" | "failed";
+  status: SessionStatus;
   createdAt: string;
   lastUsed: string;
-  options: SessionOptions;
-  timeout: number;
-  podName?: string | undefined;
-  podIP?: string | undefined;
+  timeoutSeconds: number;
+  serviceName: string | null;
+  podName: string | null;
+  serviceHost: string | null; // FQDN or cluster DNS
+  notes?: string;
+  // free-form options for future use
+  options?: Record<string, unknown>;
 }
 
-interface CreateSessionRequest {
-  timeout?: number;
-  options?: Record<string, any>;
-}
-
-interface SessionParams {
-  sessionId: string;
-}
-
-interface ProxyParams extends SessionParams {
-  "*": string;
-}
-
-interface HealthResponse {
-  healthy: boolean;
-  status?: number;
-  error?: string;
-}
+// =========================
+/* Fastify + Redis + K8s Setup */
+// =========================
 
 const fastify: FastifyInstance = Fastify({
   logger: true,
-  requestTimeout: 300000,
+  requestTimeout: 120_000,
+  trustProxy: true,
 });
 
-// Environment configuration
-const config: Config = {
-  port: process.env.PORT || 3000,
-  redis: {
-    host: process.env.REDIS_HOST || "localhost",
-    port: Number(process.env.REDIS_PORT) || 6379,
-    password: process.env.REDIS_PASSWORD || undefined,
-  },
-  kubernetes: {
-    namespace: process.env.K8S_NAMESPACE || "browser-sessions",
-    browserAPIImage:
-      process.env.BROWSER_API_IMAGE ||
-      "ghcr.io/steel-dev/steel-browser-api:latest",
-    browserUIImage:
-      process.env.BROWSER_UI_IMAGE ||
-      "ghcr.io/steel-dev/steel-browser-ui:latest",
-    apiURL: process.env.API_URL || "http://localhost:3000",
-    browserAPIPort: Number(process.env.BROWSER_API_PORT) || 3000,
-    browserUIPort: Number(process.env.BROWSER_UI_PORT) || 80,
-    jobTtl: Number(process.env.JOB_TTL_SECONDS) || 3600, // 1 hour
-    podResources: {
-      requests: {
-        memory: process.env.POD_MEMORY_REQUEST || "512Mi",
-        cpu: process.env.POD_CPU_REQUEST || "200m",
-      },
-      limits: {
-        memory: process.env.POD_MEMORY_LIMIT || "2Gi",
-        cpu: process.env.POD_CPU_LIMIT || "1000m",
-      },
-    },
-  },
-  session: {
-    defaultTimeout: Number(process.env.SESSION_TIMEOUT) || 1800, // 30 minutes
-    maxSessions: Number(process.env.MAX_SESSIONS) || 100,
-  },
-};
-
-// Initialize Redis client
+if (BASE_PATH) {
+  fastify.addHook("onRequest", async (request, _reply) => {
+    const url = request.raw.url || "/";
+    if (url === BASE_PATH || url.startsWith(BASE_PATH + "/")) {
+      request.raw.url = url.slice(BASE_PATH.length) || "/";
+    }
+  });
+}
 const redis: RedisClientType = Redis.createClient({
   socket: {
-    host: config.redis.host,
-    port: config.redis.port,
+    host: REDIS_HOST,
+    port: REDIS_PORT,
   },
-  ...(config.redis.password && { password: config.redis.password }),
+  ...(REDIS_PASSWORD ? { password: REDIS_PASSWORD } : {}),
 });
 
-// Initialize Kubernetes client
-const kc = new k8s.KubeConfig();
-if (process.env.NODE_ENV === "production") {
-  kc.loadFromCluster();
-} else {
-  kc.loadFromDefault();
+// Kubernetes client
+const kubeConfig = new KubeConfig();
+kubeConfig.loadFromDefault();
+const core = kubeConfig.makeApiClient(CoreV1Api);
+
+// =========================
+/* Redis Helpers */
+// =========================
+
+const SESSION_KEY_PREFIX = "session:";
+
+async function ensureRedisConnected(): Promise<void> {
+  if (!redis.isOpen) {
+    await redis.connect();
+    fastify.log.info("Connected to Redis");
+  }
 }
 
-const k8sApi = kc.makeApiClient(k8s.BatchV1Api);
-const k8sCoreApi = kc.makeApiClient(k8s.CoreV1Api);
+function sessionKey(sessionId: string): string {
+  return `${SESSION_KEY_PREFIX}${sessionId}`;
+}
 
-// Session management class
-class SessionManager {
-  private redis: RedisClientType;
-  private k8s: k8s.BatchV1Api;
-  private k8sCore: k8s.CoreV1Api;
-  private config: Config;
+async function saveSession(session: SessionData): Promise<void> {
+  const key = sessionKey(session.sessionId);
+  await redis.setEx(key, session.timeoutSeconds, JSON.stringify(session));
+  // Maintain an index of active session IDs for optional listing
+  await redis.sAdd("sessions:index", session.sessionId);
+  await redis.expire("sessions:index", Math.max(session.timeoutSeconds, 3600));
+}
 
-  constructor(
-    redisClient: RedisClientType,
-    k8sClient: k8s.BatchV1Api,
-    coreApi: k8s.CoreV1Api,
-    config: Config,
-  ) {
-    this.redis = redisClient;
-    this.k8s = k8sClient;
-    this.k8sCore = coreApi;
-    this.config = config;
+async function getSession(sessionId: string): Promise<SessionData> {
+  const key = sessionKey(sessionId);
+  const raw = await redis.get(key);
+  if (!raw) {
+    throw new Error("Session not found");
   }
+  return JSON.parse(raw) as SessionData;
+}
 
-  // Create a new browser session
-  async createSession(options: SessionOptions = {}): Promise<string> {
-    const sessionId = uuidv4();
-    const jobName = `browser-session-${sessionId}`;
-    fastify.log.info(`Creating session ${sessionId}...`);
-    fastify.log.info(`Job ${jobName}`);
+async function touchSession(
+  sessionId: string,
+  timeoutSeconds: number,
+): Promise<void> {
+  const key = sessionKey(sessionId);
+  const raw = await redis.get(key);
+  if (!raw) {
+    // session may have expired
+    return;
+  }
+  const data = JSON.parse(raw) as SessionData;
+  data.lastUsed = new Date().toISOString();
+  await redis.setEx(key, timeoutSeconds, JSON.stringify(data));
+}
 
-    try {
-      // Check if we're at max capacity
-      const activeCount = await this.getActiveSessionCount();
-      if (activeCount >= Number(this.config.session.maxSessions)) {
-        throw new Error("Maximum session capacity reached");
+async function deleteSessionKey(sessionId: string): Promise<void> {
+  await redis.del(sessionKey(sessionId));
+  await redis.sRem("sessions:index", sessionId);
+}
+
+async function listSessions(): Promise<SessionData[]> {
+  // Fall back to scanning keys if index set is empty
+  const ids = await redis.sMembers("sessions:index");
+  const sessions: SessionData[] = [];
+  if (ids.length > 0) {
+    for (const id of ids) {
+      const raw = await redis.get(sessionKey(id));
+      if (!raw) {
+        continue;
       }
-
-      // Create Kubernetes Job
-      const job = this.createJobManifest(sessionId, jobName, options);
-      fastify.log.info(`Job manifest ${job} created`);
-      const newJob = await this.k8s.createNamespacedJob(
-        this.config.kubernetes.namespace,
-        job,
-      );
-
-      fastify.log.info(`Job ${newJob} created`);
-
-      // Store session data in Redis
-      const sessionData: SessionData = {
-        sessionId,
-        jobName,
-        status: "pending",
-        createdAt: new Date().toISOString(),
-        lastUsed: new Date().toISOString(),
-        options: options,
-        timeout:
-          Number(options.timeout) || Number(this.config.session.defaultTimeout),
-      };
-
-      await this.redis.setEx(
-        `session:${sessionId}`,
-        sessionData.timeout,
-        JSON.stringify(sessionData),
-      );
-
-      // Wait for pod to be ready
-      await this.waitForPodReady(sessionId, jobName);
-
-      return sessionId;
-    } catch (error) {
-      // Cleanup on failure
-      await this.cleanupSession(sessionId);
-      throw error;
-    }
-  }
-
-  // Wait for pod to be ready and update session data
-  async waitForPodReady(
-    sessionId: string,
-    jobName: string,
-    maxRetries: number = 60,
-  ): Promise<void> {
-    for (let i = 0; i < maxRetries; i++) {
       try {
-        // Get pods for this job
-        const pods = await this.k8sCore.listNamespacedPod(
-          this.config.kubernetes.namespace,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          `job-name=${jobName}`,
-        );
-
-        if (pods.body.items.length > 0) {
-          const pod = pods.body.items[0];
-
-          if (
-            pod &&
-            pod.status?.phase === "Running" &&
-            pod.status.conditions?.some(
-              (c) => c.type === "Ready" && c.status === "True",
-            )
-          ) {
-            // Update session with pod info
-            const sessionData = await this.getSession(sessionId);
-            sessionData.status = "running";
-            sessionData.podName = pod.metadata?.name || undefined;
-            sessionData.podIP = pod.status.podIP || undefined;
-
-            await this.redis.setEx(
-              `session:${sessionId}`,
-              sessionData.timeout,
-              JSON.stringify(sessionData),
-            );
-
-            return;
-          }
-
-          if (pod && pod.status?.phase === "Failed") {
-            throw new Error(
-              `Pod failed to start: ${pod.status.reason || "Unknown reason"}`,
-            );
-          }
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds
-      } catch (error) {
-        if (i === maxRetries - 1) {
-          throw error;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        sessions.push(JSON.parse(raw));
+      } catch {
+        // ignore malformed
       }
     }
-
-    throw new Error("Timeout waiting for pod to be ready");
-  }
-
-  // Create Kubernetes Job manifest
-  createJobManifest(
-    sessionId: string,
-    jobName: string,
-    _options: SessionOptions,
-  ): k8s.V1Job {
-    return {
-      apiVersion: "batch/v1",
-      kind: "Job",
-      metadata: {
-        name: jobName,
-        labels: {
-          app: "steel-browser",
-          "session-id": sessionId,
-          component: "browser-session",
-        },
-      },
-      spec: {
-        ttlSecondsAfterFinished: Number(this.config.kubernetes.jobTtl),
-        backoffLimit: 0,
-        template: {
-          metadata: {
-            labels: {
-              app: "steel-browser",
-              "session-id": sessionId,
-              component: "browser-session",
-            },
-          },
-          spec: {
-            restartPolicy: "Never",
-            containers: [
-              {
-                name: "browser-api",
-                image: this.config.kubernetes.browserAPIImage,
-                ports: [
-                  {
-                    containerPort: Number(
-                      this.config.kubernetes.browserAPIPort,
-                    ),
-                  },
-                ],
-                env: [
-                  {
-                    name: "SESSION_ID",
-                    value: sessionId,
-                  },
-                  {
-                    name: "POD_NAME",
-                    valueFrom: {
-                      fieldRef: {
-                        fieldPath: "metadata.name",
-                      },
-                    },
-                  },
-                  {
-                    name: "POD_IP",
-                    valueFrom: {
-                      fieldRef: {
-                        fieldPath: "status.podIP",
-                      },
-                    },
-                  },
-                ],
-                resources: this.config.kubernetes.podResources,
-                readinessProbe: {
-                  httpGet: {
-                    path: "/v1/health",
-                    port: Number(this.config.kubernetes.browserAPIPort),
-                  },
-                  initialDelaySeconds: 10,
-                  periodSeconds: 5,
-                },
-                livenessProbe: {
-                  httpGet: {
-                    path: "/v1/health",
-                    port: Number(this.config.kubernetes.browserAPIPort),
-                  },
-                  initialDelaySeconds: 30,
-                  periodSeconds: 10,
-                },
-              },
-              {
-                name: "browser-ui",
-                image: this.config.kubernetes.browserUIImage,
-                ports: [
-                  {
-                    containerPort: Number(this.config.kubernetes.browserUIPort),
-                  },
-                ],
-                env: [
-                  {
-                    name: "SESSION_ID",
-                    value: sessionId,
-                  },
-                  {
-                    name: "API_URL",
-                    value: this.config.kubernetes.apiURL,
-                  },
-                  {
-                    name: "POD_NAME",
-                    valueFrom: {
-                      fieldRef: {
-                        fieldPath: "metadata.name",
-                      },
-                    },
-                  },
-                  {
-                    name: "POD_IP",
-                    valueFrom: {
-                      fieldRef: {
-                        fieldPath: "status.podIP",
-                      },
-                    },
-                  },
-                ],
-                resources: this.config.kubernetes.podResources,
-                // readinessProbe: {
-                //   httpGet: {
-                //     path: "/",
-                //     port: Number(this.config.kubernetes.browserUIPort),
-                //   },
-                //   initialDelaySeconds: 10,
-                //   periodSeconds: 5,
-                // },
-                // livenessProbe: {
-                //   httpGet: {
-                //     path: "/",
-                //     port: Number(this.config.kubernetes.browserUIPort),
-                //   },
-                //   initialDelaySeconds: 30,
-                //   periodSeconds: 10,
-                // },
-              },
-            ],
-          },
-        },
-      },
-    };
-  }
-
-  // Get session data from Redis
-  async getSession(sessionId: string): Promise<SessionData> {
-    const data = await this.redis.get(`session:${sessionId}`);
-    if (!data) {
-      throw new Error("Session not found");
-    }
-    return JSON.parse(data) as SessionData;
-  }
-
-  // Update session last used timestamp
-  async updateSessionActivity(sessionId: string): Promise<void> {
-    const sessionData = await this.getSession(sessionId);
-    sessionData.lastUsed = new Date().toISOString();
-
-    await this.redis.setEx(
-      `session:${sessionId}`,
-      sessionData.timeout,
-      JSON.stringify(sessionData),
-    );
-  }
-
-  // Proxy request to browser pod
-  async proxyRequest(
-    sessionId: string,
-    path: string,
-    method: Method = "GET",
-    data: any = null,
-    headers: Record<string, any> = {},
-  ): Promise<AxiosResponse> {
-    const sessionData = await this.getSession(sessionId);
-
-    if (sessionData.status !== "running" || !sessionData.podIP) {
-      throw new Error("Session not ready or not running");
-    }
-
-    // Update activity
-    await this.updateSessionActivity(sessionId);
-
-    const url = `http://${sessionData.podIP}:${this.config.kubernetes.browserAPIPort}${path}`;
-
-    try {
-      const response = await axios({
-        method,
-        url,
-        data,
-        headers: {
-          ...headers,
-          "X-Session-ID": sessionId,
-        },
-        timeout: 30000, // 30 second timeout
-      });
-
-      return response;
-    } catch (error: any) {
-      if (error.code === "ECONNREFUSED" || error.code === "ETIMEDOUT") {
-        // Pod might be dead, mark session as failed
-        sessionData.status = "failed";
-        await this.redis.setEx(
-          `session:${sessionId}`,
-          60, // Keep failed sessions for 1 minute for debugging
-          JSON.stringify(sessionData),
-        );
-      }
-      throw error;
-    }
-  }
-
-  // Clean up session and associated resources
-  async cleanupSession(sessionId: string): Promise<boolean> {
-    try {
-      const sessionData = await this.getSession(sessionId);
-
-      // Delete Kubernetes Job
-      if (sessionData.jobName) {
-        try {
-          await this.k8s.deleteNamespacedJob(
-            sessionData.jobName,
-            this.config.kubernetes.namespace,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            "Background", // Delete pods immediately
-          );
-        } catch (error: any) {
-          console.error(
-            `Failed to delete job ${sessionData.jobName}:`,
-            error.message,
-          );
-        }
-      }
-
-      // Remove from Redis
-      await this.redis.del(`session:${sessionId}`);
-
-      return true;
-    } catch (error: any) {
-      console.error(`Failed to cleanup session ${sessionId}:`, error.message);
-      return false;
-    }
-  }
-
-  // Get all active sessions
-  async getAllSessions(): Promise<SessionData[]> {
-    const keys = await this.redis.keys("session:*");
-    const sessions: SessionData[] = [];
-
-    for (const key of keys) {
-      try {
-        const data = await this.redis.get(key);
-        if (data) {
-          sessions.push(JSON.parse(data) as SessionData);
-        }
-      } catch (error: any) {
-        console.error(
-          `Failed to parse session data for ${key}:`,
-          error.message,
-        );
-      }
-    }
-
     return sessions;
   }
-
-  // Get count of active sessions
-  async getActiveSessionCount(): Promise<number> {
-    const keys = await this.redis.keys("session:*");
-    return keys.length;
-  }
-
-  // Health check for session
-  async checkSessionHealth(sessionId: string): Promise<HealthResponse> {
+  // Scan keys
+  const keys = await redis.keys(`${SESSION_KEY_PREFIX}*`);
+  for (const k of keys) {
     try {
-      const response = await this.proxyRequest(sessionId, "/v1/health", "GET");
-      return { healthy: true, status: response.status };
-    } catch (error: any) {
-      return { healthy: false, error: error.message };
+      const v = await redis.get(k);
+      if (v) {
+        sessions.push(JSON.parse(v));
+      }
+    } catch (err) {
+      fastify.log.error(`Error parsing redis value for ${k}: ${String(err)}`);
+    }
+  }
+  return sessions;
+}
+
+// =========================
+/**
+ * Kubernetes Helpers
+ */
+// =========================
+
+function browserServiceHost(sessionId: string): string {
+  return `browser-session-${sessionId}.${K8S_NAMESPACE}.svc.cluster.local`;
+}
+
+function makeReadinessProbe(): V1Probe {
+  const httpGet: V1HTTPGetAction = {
+    path: "/health",
+    port: BROWSER_PORT,
+    scheme: "HTTP",
+  };
+  return {
+    httpGet,
+    initialDelaySeconds: READINESS_INITIAL_DELAY,
+    periodSeconds: READINESS_PERIOD_SECONDS,
+    timeoutSeconds: 5,
+    failureThreshold: 12,
+    successThreshold: 1,
+  };
+}
+
+function makeContainerPorts(): V1ContainerPort[] {
+  return [
+    {
+      containerPort: BROWSER_PORT,
+      name: "http",
+      protocol: "TCP",
+    },
+  ];
+}
+
+function makePrewarmPodName(): string {
+  return `browser-prewarm-${uuidv4()}`;
+}
+
+function makeSessionPodName(sessionId: string): string {
+  return `browser-session-${sessionId}`;
+}
+
+function makeSessionServiceName(sessionId: string): string {
+  return `browser-session-${sessionId}`;
+}
+
+async function createPrewarmPod(): Promise<string> {
+  const name = makePrewarmPodName();
+  const pod: V1Pod = {
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: {
+      name,
+      namespace: K8S_NAMESPACE,
+      labels: {
+        app: "browser-session",
+        role: "prewarm",
+        podName: name,
+      },
+    },
+    spec: {
+      restartPolicy: "Always",
+      containers: [
+        {
+          name: "browser",
+          image: BROWSER_IMAGE,
+          imagePullPolicy: "IfNotPresent",
+          env: [
+            { name: "PORT", value: String(BROWSER_PORT) },
+            { name: "NODE_ENV", value: "production" },
+          ],
+          ports: makeContainerPorts(),
+          readinessProbe: makeReadinessProbe(),
+          resources: {
+            requests: { memory: POD_MEMORY_REQUEST, cpu: POD_CPU_REQUEST },
+            limits: { memory: POD_MEMORY_LIMIT, cpu: POD_CPU_LIMIT },
+          },
+        },
+      ],
+      ...(IMAGE_PULL_SECRET
+        ? {
+            imagePullSecrets: [{ name: IMAGE_PULL_SECRET }],
+          }
+        : {}),
+    },
+  };
+
+  await core.createNamespacedPod({
+    namespace: K8S_NAMESPACE,
+    body: pod,
+  } as any);
+  fastify.log.info({ name }, "Created prewarm pod");
+  return name;
+}
+
+async function createSessionPod(sessionId: string): Promise<string> {
+  const name = makeSessionPodName(sessionId);
+  const pod: V1Pod = {
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: {
+      name,
+      namespace: K8S_NAMESPACE,
+      labels: {
+        app: "browser-session",
+        role: "active",
+        sessionId,
+        podName: name,
+      },
+    },
+    spec: {
+      restartPolicy: "Always",
+      containers: [
+        {
+          name: "browser",
+          image: BROWSER_IMAGE,
+          imagePullPolicy: "IfNotPresent",
+          env: [
+            { name: "PORT", value: String(BROWSER_PORT) },
+            { name: "NODE_ENV", value: "production" },
+          ],
+          ports: makeContainerPorts(),
+          readinessProbe: makeReadinessProbe(),
+          resources: {
+            requests: { memory: POD_MEMORY_REQUEST, cpu: POD_CPU_REQUEST },
+            limits: { memory: POD_MEMORY_LIMIT, cpu: POD_CPU_LIMIT },
+          },
+        },
+      ],
+      ...(IMAGE_PULL_SECRET
+        ? {
+            imagePullSecrets: [{ name: IMAGE_PULL_SECRET }],
+          }
+        : {}),
+    },
+  };
+
+  await core.createNamespacedPod({
+    namespace: K8S_NAMESPACE,
+    body: pod,
+  } as any);
+  fastify.log.info({ name, sessionId }, "Created session pod");
+  return name;
+}
+
+async function createSessionService(
+  sessionId: string,
+  selector: Record<string, string>,
+  annotations?: Record<string, string>,
+): Promise<string> {
+  const name = makeSessionServiceName(sessionId);
+  const service: V1Service = {
+    apiVersion: "v1",
+    kind: "Service",
+    metadata: {
+      name,
+      namespace: K8S_NAMESPACE,
+      labels: {
+        app: "browser-session",
+        role: "active",
+        sessionId,
+      },
+      annotations: {
+        "steel/sessionId": sessionId,
+        ...(annotations || {}),
+      },
+    },
+    spec: {
+      type: "ClusterIP",
+      selector,
+      ports: [
+        {
+          name: "http",
+          port: BROWSER_PORT,
+          targetPort: BROWSER_PORT,
+          protocol: "TCP",
+        },
+      ],
+    },
+  };
+
+  await core.createNamespacedService({
+    namespace: K8S_NAMESPACE,
+    body: service,
+  } as any);
+
+  fastify.log.info({ name, sessionId, selector }, "Created session service");
+  return name;
+}
+
+async function deleteService(name: string): Promise<void> {
+  try {
+    await core.deleteNamespacedService({
+      name,
+      namespace: K8S_NAMESPACE,
+    } as any);
+    fastify.log.info({ name }, "Deleted service");
+  } catch (err: any) {
+    if (err?.response?.statusCode === 404) {
+      return;
+    }
+    fastify.log.warn({ err, name }, "Failed to delete service");
+  }
+}
+
+async function deletePod(name: string): Promise<void> {
+  try {
+    await core.deleteNamespacedPod({ name, namespace: K8S_NAMESPACE } as any);
+    fastify.log.info({ name }, "Deleted pod");
+  } catch (err: any) {
+    if (err?.response?.statusCode === 404) {
+      return;
+    }
+    fastify.log.warn({ err, name }, "Failed to delete pod");
+  }
+}
+
+async function listPrewarmPods(): Promise<V1Pod[]> {
+  const res: any = await core.listNamespacedPod({
+    namespace: K8S_NAMESPACE,
+    labelSelector: "app=browser-session,role=prewarm",
+  } as any);
+  const list = (res.body || res.data)?.items || [];
+  return list as V1Pod[];
+}
+
+async function listActiveServices(): Promise<V1Service[]> {
+  const res: any = await core.listNamespacedService({
+    namespace: K8S_NAMESPACE,
+    labelSelector: "app=browser-session,role=active",
+  } as any);
+  const list = (res.body || res.data)?.items || [];
+  return list as V1Service[];
+}
+
+function isPodReady(pod: V1Pod): boolean {
+  const conditions = pod.status?.conditions || [];
+  return conditions.some((c) => c.type === "Ready" && c.status === "True");
+}
+
+async function waitForServiceReadiness(
+  serviceName: string,
+  timeoutSeconds: number,
+): Promise<void> {
+  const fqdn = `${serviceName}.${K8S_NAMESPACE}.svc.cluster.local`;
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  let lastErr: any = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const url = `http://${fqdn}:${BROWSER_PORT}/health`;
+      const res = await axios.get(url, { timeout: 3000 });
+      if (res.status >= 200 && res.status < 300) {
+        return;
+      }
+      lastErr = new Error(`Unexpected HTTP ${res.status}`);
+    } catch (err: any) {
+      lastErr = err;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(
+    `Timed out waiting for service ${serviceName} readiness: ${lastErr ? String(lastErr) : "unknown error"}`,
+  );
+}
+
+async function ensurePrewarmPool(): Promise<void> {
+  // Simple Redis-based lock to avoid overshoot with multiple orchestrator instances
+  const lockKey = "prewarm:lock";
+  const lockTtlMs = 30000;
+  const token = uuidv4();
+
+  try {
+    // Acquire lock (SET NX PX)
+    const acquired = await redis.set(lockKey, token, {
+      NX: true,
+      PX: lockTtlMs,
+    });
+    if (!acquired) {
+      return;
+    }
+
+    const [pods, services] = await Promise.all([
+      listPrewarmPods(),
+      listActiveServices(),
+    ]);
+
+    // Pods targeted by an active Service (handoff in-use)
+    const targeted = new Set<string>(
+      services
+        .map((s) => s.metadata?.annotations?.["steel/targetPodName"])
+        .filter((n): n is string => !!n),
+    );
+
+    // Consider all non-terminating prewarm pods, not just Ready, to avoid overshoot
+    const nonTerminating = pods.filter(
+      (p) =>
+        !p.metadata?.deletionTimestamp &&
+        p.status?.phase !== "Failed" &&
+        p.status?.phase !== "Succeeded",
+    );
+
+    // Free = not targeted by any active session service
+    const freeNonTerminating = nonTerminating.filter((p) => {
+      const n = p.metadata?.name;
+      return !!n && !targeted.has(n);
+    });
+
+    const currentCount = freeNonTerminating.length;
+
+    if (currentCount < PREWARM_POOL_SIZE) {
+      const toCreate = PREWARM_POOL_SIZE - currentCount;
+      for (let i = 0; i < toCreate; i++) {
+        await createPrewarmPod();
+      }
+    } else if (currentCount > PREWARM_POOL_SIZE) {
+      // Prefer trimming oldest Ready free prewarms first; fallback to any free non-terminating
+      const freeReady = freeNonTerminating.filter((p) => isPodReady(p));
+      const candidates =
+        freeReady.length > 0 ? freeReady.slice() : freeNonTerminating.slice();
+
+      const sorted = candidates.sort((a, b) => {
+        const ta = new Date(a.metadata?.creationTimestamp || 0).getTime();
+        const tb = new Date(b.metadata?.creationTimestamp || 0).getTime();
+        return ta - tb;
+      });
+      const extras = sorted.slice(0, currentCount - PREWARM_POOL_SIZE);
+      for (const p of extras) {
+        if (p.metadata?.name) {
+          await deletePod(p.metadata.name);
+        }
+      }
+    }
+  } catch (err) {
+    fastify.log.warn({ err }, "ensurePrewarmPool failed");
+  } finally {
+    // Release lock safely
+    try {
+      const val = await redis.get(lockKey);
+      if (val === token) {
+        await redis.del(lockKey);
+      }
+    } catch (e) {
+      fastify.log.warn({ err: e }, "Failed to release prewarm lock");
     }
   }
 }
 
-// Initialize session manager
-const sessionManager = new SessionManager(redis, k8sApi, k8sCoreApi, config);
+async function pickPrewarmPod(): Promise<V1Pod | null> {
+  const pods = await listPrewarmPods();
+  const ready = pods.filter((p) => isPodReady(p));
+  return ready[0] || null;
+}
 
-// Register plugins
-await fastify.register(import("@fastify/cors"));
-await fastify.register(import("@fastify/swagger"), {
-  swagger: {
-    info: {
-      title: "Browser Session Orchestrator",
-      description: "API for managing headless browser sessions in Kubernetes",
-      version: "1.0.0",
-    },
-  },
-});
-
-await fastify.register(import("@fastify/swagger-ui"), {
-  routePrefix: "/docs",
-  uiConfig: {
-    docExpansion: "full",
-    deepLinking: false,
-  },
-  uiHooks: {
-    onRequest: function (request, reply, next) {
-      next();
-    },
-    preHandler: function (request, reply, next) {
-      next();
-    },
-  },
-  staticCSP: true,
-  transformStaticCSP: (header) => header,
-  transformSpecification: (swaggerObject, _request, _reply) => {
-    return swaggerObject;
-  },
-  transformSpecificationClone: true,
-});
-
-// API Routes
-
-// Create new session
-fastify.post<{
-  Body: CreateSessionRequest;
-}>(
-  "/sessions",
-  {
-    schema: {
-      description: "Create a new browser session",
-      body: {
-        type: "object",
-        properties: {
-          timeout: {
-            type: "number",
-            description: "Session timeout in seconds",
-            default: 3000,
-          },
-          options: {
-            type: "object",
-            description: "Additional browser options",
-          },
-        },
-      },
-      response: {
-        200: {
-          type: "object",
-          properties: {
-            sessionId: { type: "string" },
-            status: { type: "string" },
-            message: { type: "string" },
-          },
-        },
-      },
-    },
-  },
-  async (
-    request: FastifyRequest<{ Body: CreateSessionRequest }>,
-    reply: FastifyReply,
-  ) => {
-    try {
-      console.log("Creating session...");
-      console.log(request.body);
-      const sessionId = await sessionManager.createSession(request.body || {});
-      return {
-        sessionId,
-        status: "created",
-        message: "Session created successfully",
-      };
-    } catch (error: any) {
-      reply.code(500);
-      return { error: error.message };
-    }
-  },
-);
-
-// Get session UI
-fastify.get<{
-  Params: SessionParams;
-}>(
-  "/sessions/:sessionId",
-  {
-    schema: {
-      description: "Get session UI",
-      params: {
-        type: "object",
-        properties: {
-          sessionId: { type: "string" },
-        },
-      },
-    },
-  },
-  async (
-    request: FastifyRequest<{ Params: SessionParams }>,
-    reply: FastifyReply,
-  ) => {
-    try {
-      const sessionData = await sessionManager.getSession(
-        request.params.sessionId,
-      );
-
-      if (sessionData.status !== "running" || !sessionData.podIP) {
-        reply.type("text/html");
-        return `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Session ${request.params.sessionId}</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; text-align: center; }
-        .status { padding: 20px; border-radius: 8px; margin: 20px 0; }
-        .pending { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; }
-        .failed { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
-        .loading { animation: spin 1s linear infinite; display: inline-block; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>
-    <script>
-        setTimeout(() => location.reload(), 2000);
-    </script>
-</head>
-<body>
-    <h1>Browser Session</h1>
-    <div class="status ${sessionData.status}">
-        <div class="loading">⟳</div>
-        <p>Session Status: <strong>${sessionData.status.toUpperCase()}</strong></p>
-        <p>Session ID: ${request.params.sessionId}</p>
-        ${sessionData.status === "pending" ? "<p>Session is starting up, please wait...</p>" : ""}
-        ${sessionData.status === "failed" ? "<p>Session failed to start. Please try creating a new session.</p>" : ""}
-    </div>
-</body>
-</html>`;
+// Cleanup orphaned resources for expired sessions
+async function cleanupOrphans(): Promise<void> {
+  try {
+    const services = await listActiveServices();
+    for (const svc of services) {
+      const sessionId = svc.metadata?.annotations?.["steel/sessionId"];
+      const targetPodName = svc.metadata?.annotations?.["steel/targetPodName"];
+      if (!sessionId) {
+        continue;
       }
-
-      // Update activity
-      await sessionManager.updateSessionActivity(request.params.sessionId);
-
-      // Serve the UI via iframe pointing to the pod's UI port
-      const uiUrl = `http://${sessionData.podIP}:${config.kubernetes.browserUIPort}`;
-
-      reply.type("text/html");
-      return `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Browser Session ${request.params.sessionId}</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            overflow: hidden;
-            font-family: Arial, sans-serif;
+      const hasSession = await redis.exists(sessionKey(sessionId));
+      if (!hasSession) {
+        // Delete service and its pod (if assigned)
+        if (svc.metadata?.name) {
+          await deleteService(svc.metadata.name);
         }
-        .header {
-            background: #f8f9fa;
-            padding: 10px 20px;
-            border-bottom: 1px solid #dee2e6;
-            font-size: 14px;
-            color: #495057;
+        if (targetPodName) {
+          await deletePod(targetPodName);
+        } else if (sessionId) {
+          // Fallback: try deleting conventional session pod name
+          await deletePod(makeSessionPodName(sessionId));
         }
-        .session-info {
-            display: inline-block;
-            margin-right: 20px;
-        }
-        .status-indicator {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #28a745;
-            margin-right: 5px;
-        }
-        iframe {
-            width: 100%;
-            height: calc(100vh - 50px);
-            border: none;
-            display: block;
-        }
-        .error {
-            padding: 20px;
-            text-align: center;
-            color: #721c24;
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-            margin: 20px;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div class="session-info">
-            <span class="status-indicator"></span>
-            Session: ${request.params.sessionId}
-        </div>
-        <div class="session-info">
-            Pod: ${sessionData.podName}
-        </div>
-        <div class="session-info">
-            Status: Running
-        </div>
-    </div>
-    <iframe src="${uiUrl}"
-            title="Browser Session UI"
-            allow="camera; microphone; fullscreen; autoplay"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation">
-        <div class="error">
-            <h3>Unable to load browser interface</h3>
-            <p>Your browser doesn't support iframes or the session UI is not responding.</p>
-            <p><a href="${uiUrl}" target="_blank">Open in new window</a></p>
-        </div>
-    </iframe>
-</body>
-</html>`;
-    } catch (error: any) {
-      reply.code(404).type("text/html");
-      return `
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Session Not Found</title>
-    <meta charset="utf-8">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; text-align: center; }
-        .error { color: #721c24; background: #f8d7da; padding: 20px; border-radius: 4px; }
-    </style>
-</head>
-<body>
-    <div class="error">
-        <h1>Session Not Found</h1>
-        <p>Session ID: ${request.params.sessionId}</p>
-        <p>${error.message}</p>
-    </div>
-</body>
-</html>`;
+        fastify.log.info(
+          { sessionId, service: svc.metadata?.name, pod: targetPodName },
+          "Cleaned orphaned session resources",
+        );
+      }
     }
-  },
-);
+    // Optionally: clear stale prewarms that are not Ready for a long time
+    const prewarms = await listPrewarmPods();
+    for (const p of prewarms) {
+      const ready = isPodReady(p);
+      const created = new Date(p.metadata?.creationTimestamp || 0).getTime();
+      const age = Date.now() - created;
+      if (!ready && age > 10 * 60 * 1000 && p.metadata?.name) {
+        await deletePod(p.metadata.name);
+      }
+    }
+  } catch (err) {
+    fastify.log.warn({ err }, "cleanupOrphans failed");
+  }
+}
 
-// Get session status
-fastify.get<{
-  Params: SessionParams;
-}>(
-  "/sessions/:sessionId/status",
-  {
-    schema: {
-      description: "Get session status",
-      params: {
-        type: "object",
-        properties: {
-          sessionId: { type: "string" },
-        },
+// =========================
+/* Fastify Routes */
+// =========================
+
+fastify.post<{
+  Body: { timeout?: number; options?: Record<string, unknown> };
+}>("/sessions", async (request) => {
+  const { timeout = SESSION_TIMEOUT_DEFAULT, options = {} } =
+    request.body || {};
+  const sessionId = uuidv4();
+  const serviceName = makeSessionServiceName(sessionId);
+  const serviceHost = browserServiceHost(sessionId);
+  let podName: string | null = null;
+
+  const session: SessionData = {
+    sessionId,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    lastUsed: new Date().toISOString(),
+    timeoutSeconds: Number(timeout) || SESSION_TIMEOUT_DEFAULT,
+    serviceName,
+    podName: null,
+    serviceHost,
+    options,
+  };
+
+  await saveSession(session);
+
+  // Respect MAX_SESSIONS based on existing active services
+  const activeServices = await listActiveServices();
+  if (activeServices.length >= MAX_SESSIONS) {
+    session.status = "failed";
+    session.notes = "Max sessions reached";
+    await saveSession(session);
+    return { sessionId, status: "failed", error: "Max sessions reached" };
+  }
+
+  // Hand off to prewarm if available, otherwise create a dedicated pod
+  const prewarm = await pickPrewarmPod();
+  if (prewarm && prewarm.metadata?.name) {
+    podName = prewarm.metadata.name;
+    session.podName = podName;
+
+    // Create a service that selects this specific pod via a unique label
+    // Prewarm pods are created with label podName=<metadata.name>
+    await createSessionService(
+      sessionId,
+      { podName },
+      {
+        "steel/targetPodName": podName,
+        "steel/handOff": "prewarm",
       },
-    },
-  },
-  async (
-    request: FastifyRequest<{ Params: SessionParams }>,
-    reply: FastifyReply,
-  ) => {
-    try {
-      const sessionData = await sessionManager.getSession(
-        request.params.sessionId,
-      );
-      const health = await sessionManager.checkSessionHealth(
-        request.params.sessionId,
-      );
+    );
 
+    // Wait for readiness on the service (should be immediate since pod is ready)
+    try {
+      await waitForServiceReadiness(serviceName, READINESS_TIMEOUT_SECONDS);
+      session.status = "running";
+      await saveSession(session);
       return {
-        ...sessionData,
-        health,
-      };
-    } catch (error: any) {
-      reply.code(404);
-      return { error: error.message };
-    }
-  },
-);
-
-// Proxy requests to browser
-fastify.all<{
-  Params: ProxyParams;
-}>(
-  "/sessions/:sessionId/*",
-  async (
-    request: FastifyRequest<{ Params: ProxyParams }>,
-    reply: FastifyReply,
-  ) => {
-    try {
-      const sessionId = request.params.sessionId;
-      const path = "/" + request.params["*"];
-      fastify.log.info(request.params);
-
-      const response = await sessionManager.proxyRequest(
         sessionId,
-        path,
-        request.method as Method,
-        request.body,
-        request.headers as Record<string, any>,
-      );
-
-      // Forward response
-      reply.code(response.status);
-      Object.entries(response.headers).forEach(([key, value]) => {
-        if (key.toLowerCase() !== "content-length") {
-          reply.header(key, value as string);
-        }
-      });
-
-      return response.data;
-    } catch (error: any) {
-      reply.code(500);
-      return { error: error.message };
+        status: "running",
+        serviceHost,
+        serviceName,
+        podName,
+      };
+    } catch (err: any) {
+      session.status = "failed";
+      session.notes = `Prewarm handoff readiness failed: ${String(err?.message || err)}`;
+      await saveSession(session);
+      // cleanup service (pod remains as prewarm will be recycled or deleted later)
+      await deleteService(serviceName);
+      return { sessionId, status: "failed", error: session.notes };
     }
-  },
-);
+  }
 
-// Delete session
-fastify.delete<{
-  Params: SessionParams;
-}>(
+  // Create dedicated session pod
+  podName = await createSessionPod(sessionId);
+  session.podName = podName;
+
+  // Create service selecting session pod (via sessionId label or podName)
+  await createSessionService(
+    sessionId,
+    { sessionId },
+    {
+      "steel/targetPodName": podName,
+      "steel/handOff": "cold",
+    },
+  );
+
+  // Wait for readiness
+  try {
+    await waitForServiceReadiness(serviceName, READINESS_TIMEOUT_SECONDS);
+    session.status = "running";
+    await saveSession(session);
+    return { sessionId, status: "running", serviceHost, serviceName, podName };
+  } catch (err: any) {
+    session.status = "failed";
+    session.notes = `Cold start readiness failed: ${String(err?.message || err)}`;
+    await saveSession(session);
+    // Cleanup pod + service on failure
+    await deleteService(serviceName);
+    if (podName) {
+      await deletePod(podName);
+    }
+    return { sessionId, status: "failed", error: session.notes };
+  }
+});
+
+fastify.get<{ Params: { sessionId: string } }>(
   "/sessions/:sessionId",
-  {
-    schema: {
-      description: "Delete a session",
-      params: {
-        type: "object",
-        properties: {
-          sessionId: { type: "string" },
-        },
-      },
-    },
-  },
-  async (
-    request: FastifyRequest<{ Params: SessionParams }>,
-    reply: FastifyReply,
-  ) => {
+  async (request, reply) => {
     try {
-      const success = await sessionManager.cleanupSession(
-        request.params.sessionId,
-      );
-      return {
-        success,
-        message: success
-          ? "Session deleted successfully"
-          : "Failed to delete session",
-      };
-    } catch (error: any) {
-      reply.code(500);
-      return { error: error.message };
+      const s = await getSession(request.params.sessionId);
+      if (s.status !== "running") {
+        reply.type("text/html");
+        return `<html><body><h1>Session ${s.sessionId}</h1><p>Status: ${s.status}</p></body></html>`;
+      }
+      // Redirect to proxied root path to keep UI behavior consistent
+      return reply.redirect(`${BASE_PATH}/sessions/${s.sessionId}/`);
+    } catch (err: any) {
+      reply.code(404).type("text/html");
+      return `<html><body><h1>Session Not Found</h1><p>${String(
+        err.message || err,
+      )}</p></body></html>`;
     }
   },
 );
 
-// List all sessions
-fastify.get(
-  "/sessions",
-  {
-    schema: {
-      description: "List all active sessions",
-    },
-  },
-  async (_request: FastifyRequest, reply: FastifyReply) => {
+fastify.get<{ Params: { sessionId: string } }>(
+  "/sessions/:sessionId/status",
+  async (request) => {
     try {
-      const sessions = await sessionManager.getAllSessions();
-      return {
-        sessions,
-        count: sessions.length,
-      };
-    } catch (error: any) {
-      reply.code(500);
-      return { error: error.message };
+      const session = await getSession(request.params.sessionId);
+      return { ...session, healthy: session.status === "running" };
+    } catch (err: any) {
+      return { error: String(err.message || err) };
     }
   },
 );
 
-// Health check endpoint
-fastify.get("/health", async (request: FastifyRequest, reply: FastifyReply) => {
+fastify.delete<{ Params: { sessionId: string } }>(
+  "/sessions/:sessionId",
+  async (request) => {
+    const sid = request.params.sessionId;
+    try {
+      const s = await getSession(sid).catch(() => null);
+      if (s?.serviceName) {
+        await deleteService(s.serviceName);
+      }
+      if (s?.podName) {
+        await deletePod(s.podName);
+      }
+      await deleteSessionKey(sid);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  },
+);
+
+fastify.get("/sessions", async () => {
+  const sessions = await listSessions();
+  return { sessions, count: sessions.length };
+});
+
+fastify.get("/health", async () => {
   try {
     await redis.ping();
+    // Basic k8s check: list services with small timeout
+    await core
+      .listNamespacedService({ namespace: K8S_NAMESPACE, limit: 1 } as any)
+      .catch(() => null);
+    const sessions = await listSessions();
     return {
-      status: "healthy",
+      status: "ok",
+      sessions: sessions.length,
       timestamp: new Date().toISOString(),
-      activeSessions: await sessionManager.getActiveSessionCount(),
     };
-  } catch (error: any) {
-    reply.code(500);
-    return {
-      status: "unhealthy",
-      error: error.message,
-    };
+  } catch (err) {
+    return { status: "unhealthy", error: String(err) };
   }
 });
 
-// Metrics endpoint (Prometheus format)
-fastify.get(
-  "/metrics",
-  async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const sessions = await sessionManager.getAllSessions();
-      const activeCount = sessions.length;
-      const runningCount = sessions.filter(
-        (s) => s.status === "running",
-      ).length;
-      const pendingCount = sessions.filter(
-        (s) => s.status === "pending",
-      ).length;
-      const failedCount = sessions.filter((s) => s.status === "failed").length;
-
-      const metrics = `
-# HELP browser_sessions_total Total number of browser sessions
-# TYPE browser_sessions_total gauge
-browser_sessions_total ${activeCount}
-
-# HELP browser_sessions_running Number of running browser sessions
-# TYPE browser_sessions_running gauge
-browser_sessions_running ${runningCount}
-
-# HELP browser_sessions_pending Number of pending browser sessions
-# TYPE browser_sessions_pending gauge
-browser_sessions_pending ${pendingCount}
-
-# HELP browser_sessions_failed Number of failed browser sessions
-# TYPE browser_sessions_failed gauge
-browser_sessions_failed ${failedCount}
-    `.trim();
-
-      reply.type("text/plain");
-      return metrics;
-    } catch (error: any) {
-      reply.code(500);
-      return `# Error generating metrics: ${error.message}`;
-    }
-  },
-);
-
-// Background cleanup task
-setInterval(async () => {
-  try {
-    const sessions = await sessionManager.getAllSessions();
-    const now = new Date();
-
-    for (const session of sessions) {
-      const lastUsed = new Date(session.lastUsed);
-      const ageMinutes = (now.getTime() - lastUsed.getTime()) / (1000 * 60);
-
-      // Cleanup sessions that haven't been used for longer than their timeout
-      if (ageMinutes > session.timeout / 60) {
-        console.log(`Cleaning up inactive session: ${session.sessionId}`);
-        await sessionManager.cleanupSession(session.sessionId);
-      }
-    }
-  } catch (error: any) {
-    console.error("Background cleanup error:", error.message);
+fastify.get("/", async (_request, reply) => {
+  reply.type("text/html");
+  const base = BASE_PATH || "";
+  return `<html><body><h1>Steel Browser Orchestrator</h1><ul><li><a href="${base}/sessions">Sessions</a></li><li><a href="${base}/health">Health</a></li><li><a href="${base}/docs">Docs</a></li></ul></body></html>`;
+});
+// Dynamic proxy to per-session service
+async function proxyToSession(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  includeTrailingSlashRoot = false,
+) {
+  const sessionId = (request.params as any).sessionId as string;
+  if (!sessionId) {
+    return reply.code(400).send({ error: "Missing sessionId" });
   }
-}, 60000); // Run every minute
 
-// Graceful shutdown
-const gracefulShutdown = async (): Promise<void> => {
-  console.log("Shutting down gracefully...");
-
+  // Validate session exists, and refresh TTL
+  let session: SessionData;
   try {
-    // Close Redis connection
-    await redis.quit();
-
-    // Close Fastify
-    await fastify.close();
-
-    console.log("Shutdown complete");
-    process.exit(0);
-  } catch (error: any) {
-    console.error("Error during shutdown:", error);
-    process.exit(1);
+    session = await getSession(sessionId);
+  } catch {
+    return reply.code(404).send({ error: "Session not found" });
   }
-};
+  // Update usage / TTL
+  await touchSession(sessionId, session.timeoutSeconds);
 
-process.on("SIGTERM", gracefulShutdown);
-process.on("SIGINT", gracefulShutdown);
+  if (session.status !== "running") {
+    return reply
+      .code(409)
+      .send({ error: `Session not ready: ${session.status}` });
+  }
 
-// Start server
-const start = async (): Promise<void> => {
+  // Path suffix
+  let suffix = (request.params as any)["*"] || "";
+  if (includeTrailingSlashRoot && !suffix) {
+    suffix = "";
+  }
+  // Build target URL
+  const targetHost = browserServiceHost(sessionId);
+  const originalUrl = request.raw.url || "/";
+  const queryIndex = originalUrl.indexOf("?");
+  const queryPart = queryIndex >= 0 ? originalUrl.slice(queryIndex) : "";
+  const dest = `http://${targetHost}:${BROWSER_PORT}/${suffix}${queryPart}`;
+
+  // Use reply.from to proxy the request to upstream
+  return reply.from(dest);
+}
+
+// Proxy all subpaths
+fastify.all("/sessions/:sessionId/*", async (request, reply) => {
+  return proxyToSession(request, reply);
+});
+
+// =========================
+/* Background Workers */
+// =========================
+
+async function startBackgroundWorkers(): Promise<void> {
+  // Prewarm ensure loop
+  setInterval(() => {
+    ensurePrewarmPool().catch((err) =>
+      fastify.log.warn({ err }, "Prewarm loop error"),
+    );
+  }, PREWARM_CHECK_INTERVAL_MS).unref();
+
+  // Janitor loop for orphans and general cleanup
+  setInterval(() => {
+    cleanupOrphans().catch((err) =>
+      fastify.log.warn({ err }, "Janitor loop error"),
+    );
+  }, JANITOR_INTERVAL_MS).unref();
+
+  // Initial bootstrap
+  await ensurePrewarmPool();
+  await cleanupOrphans();
+}
+
+// =========================
+/* Startup */
+// =========================
+
+async function start(): Promise<void> {
+  console.log("Starting orchestrator...");
+  // Wait for the Redis Service to have ready endpoints (avoids DNS/endpoint flaps)
+  // const waitEndpoints = async (name: string, timeoutSeconds: number) => {
+  //   const deadline = Date.now() + timeoutSeconds * 1000;
+  //   let lastErr: unknown = null;
+  //   while (Date.now() < deadline) {
+  //     try {
+  //       const res: any = await core.readNamespacedEndpoints({
+  //         name,
+  //         namespace: K8S_NAMESPACE,
+  //       } as any);
+  //       const endpoints = (res.body || res.data) as {
+  //         subsets?: Array<{
+  //           addresses?: Array<unknown>;
+  //           readyAddresses?: Array<unknown>;
+  //           notReadyAddresses?: Array<unknown>;
+  //         }>;
+  //       };
+  //       const subsets = endpoints?.subsets || [];
+  //       const hasAddr = subsets.some(
+  //         (s) =>
+  //           (s.addresses && s.addresses.length > 0) ||
+  //           (s.readyAddresses && s.readyAddresses.length > 0),
+  //       );
+  //       if (hasAddr) {
+  //         return;
+  //       }
+  //     } catch (e) {
+  //       lastErr = e;
+  //     }
+  //     await new Promise((r) => setTimeout(r, 1000));
+  //   }
+  //   throw new Error(
+  //     `Timed out waiting for endpoints for service "${name}" (${String(lastErr)})`,
+  //   );
+  // };
+
+  // Ensure the K8s Endpoints object for Redis reports at least one ready address
+  // await waitEndpoints("redis", 120);
+
+  // Ensure Redis client is connected (with internal retries)
+  await ensureRedisConnected();
+
+  // Extra Redis reachability check
   try {
-    // Connect to Redis
-    await redis.connect();
-    console.log("Connected to Redis");
-
-    // Start Fastify server
-    await fastify.listen({
-      port: Number(config.port),
-      host: "0.0.0.0",
-    });
-
-    console.log(`Server listening on port ${config.port}`);
-    console.log(`API docs available at http://localhost:${config.port}/docs`);
-  } catch (error: any) {
-    console.error("Failed to start server:", error);
-    process.exit(1);
+    await redis.ping();
+  } catch (err) {
+    throw new Error(`Redis ping failed after connect: ${String(err)}`);
   }
-};
 
-start();
+  // Only after Redis and Service DNS/endpoints are good, start workers and server
+  await startBackgroundWorkers();
+
+  await fastify.register(replyFrom, {
+    // upstream: "http://unused-upstream.local",
+    undici: { connections: 100, pipelining: 1 },
+  });
+
+  await fastify.listen({ port: PORT, host: "0.0.0.0" });
+  fastify.log.info(`Orchestrator listening on ${PORT}`);
+}
+
+start().catch((err) => {
+  // eslint-disable-next-line no-console
+  console.error("Failed to start server:", err);
+  // process.exit(1);
+});
