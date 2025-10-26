@@ -1,0 +1,27 @@
+{{- if and .Values.monitoring.serviceMonitor.enabled .Values.orchestrator.enabled -}}
+{{- $ns := include "steel-cluster.namespace" . -}}
+{{- $app := .Values.orchestrator.name | default "browser-orchestrator" -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "steel-cluster.fullname" . }}-orchestrator
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $app }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+{{- with .Values.monitoring.serviceMonitor.labels }}
+{{ toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ $app }}
+  namespaceSelector:
+    matchNames:
+      - {{ $ns }}
+  endpoints:
+    - port: {{ .Values.orchestrator.service.portName | default "http" | quote }}
+      path: {{ .Values.monitoring.serviceMonitor.path | default "/metrics" | quote }}
+      interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" | quote }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout | default "10s" | quote }}
+{{- end }}

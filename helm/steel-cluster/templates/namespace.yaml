@@ -1,0 +1,14 @@
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "steel-cluster.namespace" . }}
+  labels:
+    name: {{ include "steel-cluster.namespace" . }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+{{- $ann := include "steel-cluster.annotations" . }}
+{{- if $ann }}
+  annotations:
+{{ $ann | nindent 4 }}
+{{- end }}
+{{- end }}

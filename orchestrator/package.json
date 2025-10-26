@@ -1,5 +1,5 @@
 {
-  "name": "browser-session-orchestrator",
+  "name": "steel-cluster-orchestrator",
   "version": "1.0.0",
   "type": "module",
   "description": "Kubernetes-based browser session orchestrator",

@@ -1,0 +1,110 @@
+{{- if .Values.redis.enabled -}}
+{{- $ns := include "steel-cluster.namespace" . -}}
+{{- $app := .Values.redis.name | default "redis" -}}
+{{- $image := include "steel-cluster.image" (dict "repository" .Values.redis.image.repository "tag" .Values.redis.image.tag) -}}
+
+{{- if .Values.redis.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $app }}-data
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $app }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+spec:
+  accessModes:
+{{ toYaml .Values.redis.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size | quote }}
+  {{- with .Values.redis.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $app }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $app }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.redis.replicas }}
+  selector:
+    matchLabels:
+      app: {{ $app }}
+  template:
+    metadata:
+      labels:
+        app: {{ $app }}
+{{ include "steel-cluster.labels" . | nindent 8 }}
+    spec:
+{{ include "steel-cluster.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: redis
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          ports:
+            - name: redis
+              containerPort: {{ .Values.redis.service.targetPort }}
+          command:
+            - redis-server
+            - --appendonly
+            - {{ .Values.redis.config.appendonly | quote }}
+            - --maxmemory
+            - {{ .Values.redis.config.maxmemory | quote }}
+            - --maxmemory-policy
+            - {{ .Values.redis.config.maxmemoryPolicy | quote }}
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+{{- with .Values.redis.resources }}
+          resources:
+{{ toYaml . | nindent 12 }}
+{{- end }}
+      volumes:
+        - name: redis-data
+{{- if .Values.redis.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $app }}-data
+{{- else }}
+          emptyDir: {}
+{{- end }}
+{{- with .Values.redis.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.redis.affinity }}
+      affinity:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.redis.tolerations }}
+      tolerations:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $app }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $app }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+{{- with .Values.redis.service.annotations }}
+  annotations:
+{{ toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  type: {{ .Values.redis.service.type }}
+  selector:
+    app: {{ $app }}
+  ports:
+    - name: redis
+      port: {{ .Values.redis.service.port }}
+      targetPort: {{ .Values.redis.service.targetPort }}
+{{- end }}

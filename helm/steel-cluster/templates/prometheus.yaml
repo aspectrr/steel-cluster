@@ -1,0 +1,232 @@
+{{- if .Values.prometheus.enabled -}}
+{{- $ns := include "steel-cluster.namespace" . -}}
+{{- $name := .Values.prometheus.name | default "prometheus" -}}
+{{- $image := include "steel-cluster.image" (dict "repository" .Values.prometheus.image.repository "tag" .Values.prometheus.image.tag) -}}
+{{- $orchJob := ( .Values.orchestrator.name | default "browser-orchestrator") -}}
+{{- $redisJob := ( .Values.redis.name | default "redis") -}}
+{{- $saName := include "steel-cluster.prometheus.serviceAccountName" . -}}
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-config
+  namespace: {{ $ns }}
+  labels:
+{{ include "steel-cluster.labels" . | nindent 4 }}
+data:
+  prometheus.yml: |-
+    global:
+      scrape_interval: {{ .Values.prometheus.scrape.globalScrapeInterval }}
+      evaluation_interval: {{ .Values.prometheus.scrape.globalEvaluationInterval }}
+
+    rule_files:
+      - "/etc/prometheus/rules/*.yml"
+
+    scrape_configs:
+{{- if .Values.prometheus.scrape.orchestrator.enabled }}
+      - job_name: '{{ $orchJob }}'
+        static_configs:
+          - targets: ['{{ .Values.prometheus.scrape.orchestrator.serviceName | default $orchJob }}:{{ .Values.prometheus.scrape.orchestrator.servicePort }}']
+        metrics_path: '{{ .Values.prometheus.scrape.orchestrator.metricsPath }}'
+        scrape_interval: {{ .Values.prometheus.scrape.orchestrator.scrapeInterval }}
+{{- end }}
+{{- if .Values.redis.enabled }}
+      - job_name: '{{ $redisJob }}'
+        static_configs:
+          - targets: ['{{ $redisJob }}:{{ .Values.redis.service.port }}']
+{{- end }}
+{{- if .Values.prometheus.scrape.kubernetesPods.enabled }}
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+{{- range .Values.prometheus.scrape.kubernetesPods.namespaces }}
+                - {{ . }}
+{{- end }}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+{{- end }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-rules
+  namespace: {{ $ns }}
+  labels:
+{{ include "steel-cluster.labels" . | nindent 4 }}
+data:
+  browser-sessions.yml: |-
+    groups:
+      - name: browser-sessions
+        rules:
+{{- if .Values.alerts.rules.highSessionCount.enabled }}
+          - alert: HighSessionCount
+            expr: browser_sessions_total > {{ .Values.alerts.rules.highSessionCount.threshold }}
+            for: {{ .Values.alerts.rules.highSessionCount.for }}
+            labels:
+              severity: {{ .Values.alerts.rules.highSessionCount.severity | quote }}
+            annotations:
+              summary: "High number of active browser sessions"
+              description: "Number of active sessions ({{`{{ $value }}`}}) is above {{ .Values.alerts.rules.highSessionCount.threshold }}"
+{{- end }}
+{{- if .Values.alerts.rules.sessionCreationFailure.enabled }}
+          - alert: SessionCreationFailure
+            expr: increase(browser_sessions_failed[{{ .Values.alerts.rules.sessionCreationFailure.increaseWindow }}]) > {{ .Values.alerts.rules.sessionCreationFailure.threshold }}
+            for: {{ .Values.alerts.rules.sessionCreationFailure.for }}
+            labels:
+              severity: {{ .Values.alerts.rules.sessionCreationFailure.severity | quote }}
+            annotations:
+              summary: "High session creation failure rate"
+              description: "{{`{{ $value }}`}} sessions failed to start in the last {{ .Values.alerts.rules.sessionCreationFailure.increaseWindow }}"
+{{- end }}
+{{- if .Values.alerts.rules.orchestratorDown.enabled }}
+          - alert: OrchestratorDown
+            expr: up{job="{{ $orchJob }}"} == 0
+            for: {{ .Values.alerts.rules.orchestratorDown.for }}
+            labels:
+              severity: {{ .Values.alerts.rules.orchestratorDown.severity | quote }}
+            annotations:
+              summary: "Browser orchestrator is down"
+              description: "The browser session orchestrator is not responding"
+{{- end }}
+{{- if and .Values.alerts.rules.redisDown.enabled .Values.redis.enabled }}
+          - alert: RedisDown
+            expr: up{job="{{ $redisJob }}"} == 0
+            for: {{ .Values.alerts.rules.redisDown.for }}
+            labels:
+              severity: {{ .Values.alerts.rules.redisDown.severity | quote }}
+            annotations:
+              summary: "Redis is down"
+              description: "Redis instance is not responding"
+{{- end }}
+
+{{- if .Values.prometheus.storage.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-data
+  namespace: {{ $ns }}
+  labels:
+{{ include "steel-cluster.labels" . | nindent 4 }}
+spec:
+  accessModes:
+{{ toYaml .Values.prometheus.storage.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.prometheus.storage.persistence.size | quote }}
+{{- with .Values.prometheus.storage.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+{{- end }}
+{{- end }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+{{ include "steel-cluster.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $saName }}
+{{ include "steel-cluster.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: prometheus
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.prometheus.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.prometheus.service.targetPort }}
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus/"
+            - "--web.external-url={{ .Values.prometheus.web.externalUrl }}"
+            - "--web.console.libraries=/etc/prometheus/console_libraries"
+            - "--web.console.templates=/etc/prometheus/consoles"
+            - "--storage.tsdb.retention.time={{ .Values.prometheus.web.retention }}"
+            - "--web.enable-lifecycle"
+          volumeMounts:
+            - name: {{ $name }}-config
+              mountPath: /etc/prometheus/
+            - name: {{ $name }}-rules
+              mountPath: /etc/prometheus/rules
+            - name: {{ $name }}-storage
+              mountPath: /prometheus/
+{{- with .Values.prometheus.resources }}
+          resources:
+{{ toYaml . | nindent 12 }}
+{{- end }}
+{{- with .Values.prometheus.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.prometheus.affinity }}
+      affinity:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.prometheus.tolerations }}
+      tolerations:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+      volumes:
+        - name: {{ $name }}-config
+          configMap:
+            name: {{ $name }}-config
+        - name: {{ $name }}-rules
+          configMap:
+            name: {{ $name }}-rules
+        - name: {{ $name }}-storage
+{{- if .Values.prometheus.storage.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $name }}-data
+{{- else }}
+          emptyDir: {}
+{{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+{{- with .Values.prometheus.service.annotations }}
+  annotations:
+{{ toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  type: {{ .Values.prometheus.service.type }}
+  selector:
+    app: {{ $name }}
+  ports:
+    - name: http
+      port: {{ .Values.prometheus.service.port }}
+      targetPort: {{ .Values.prometheus.service.targetPort }}
+{{- end }}

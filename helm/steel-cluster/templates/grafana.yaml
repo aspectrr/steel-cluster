@@ -1,0 +1,260 @@
+{{- if .Values.grafana.enabled -}}
+{{- $ns := include "steel-cluster.namespace" . -}}
+{{- $name := .Values.grafana.name | default "grafana" -}}
+{{- $image := include "steel-cluster.image" (dict "repository" .Values.grafana.image.repository "tag" .Values.grafana.image.tag) -}}
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-datasources
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+data:
+  grafana.ini: |
+    [server]
+    root_url = {{ .Values.grafana.server.rootUrl }}
+    serve_from_sub_path = {{ ternary "true" "false" .Values.grafana.server.serveFromSubPath }}
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: {{ .Values.grafana.datasources.prometheus.url }}
+        access: proxy
+        isDefault: {{ .Values.grafana.datasources.prometheus.isDefault }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-dashboard-config
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+data:
+  dashboard.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+
+{{- if and .Values.grafana.dashboards.enabled .Values.grafana.dashboards.browserSessions.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-dashboard
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+data:
+  browser-sessions-dashboard.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "Browser Session Orchestrator",
+        "tags": ["browser", "sessions"],
+        "style": "dark",
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Active Sessions",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "browser_sessions_total",
+                "legendFormat": "Total Sessions"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 50},
+                    {"color": "red", "value": 80}
+                  ]
+                }
+              }
+            },
+            "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0}
+          },
+          {
+            "id": 2,
+            "title": "Session Status Distribution",
+            "type": "piechart",
+            "targets": [
+              {
+                "expr": "browser_sessions_running",
+                "legendFormat": "Running"
+              },
+              {
+                "expr": "browser_sessions_pending",
+                "legendFormat": "Pending"
+              },
+              {
+                "expr": "browser_sessions_failed",
+                "legendFormat": "Failed"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0}
+          },
+          {
+            "id": 3,
+            "title": "Sessions Over Time",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "browser_sessions_total",
+                "legendFormat": "Total Sessions"
+              },
+              {
+                "expr": "browser_sessions_running",
+                "legendFormat": "Running Sessions"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "id": 4,
+            "title": "HTTP Request Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(http_requests_total[5m])",
+                "legendFormat": "Requests/sec"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          },
+          {
+            "id": 5,
+            "title": "Pod Resource Usage",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"browser-sessions\"}[5m])) by (pod)",
+                "legendFormat": "CPU Usage - {{pod}}"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+          }
+        ],
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "refresh": "10s"
+      }
+    }
+{{- end }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+{{ include "steel-cluster.labels" . | nindent 8 }}
+    spec:
+{{ include "steel-cluster.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: grafana
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.grafana.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.grafana.service.targetPort }}
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: {{ .Values.grafana.admin.password | quote }}
+{{- if .Values.grafana.plugins }}
+            - name: GF_INSTALL_PLUGINS
+              value: {{ join "," .Values.grafana.plugins | quote }}
+{{- end }}
+            - name: GF_SERVER_ROOT_URL
+              value: {{ .Values.grafana.server.rootUrl | quote }}
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: {{ ternary "true" "false" .Values.grafana.server.serveFromSubPath | quote }}
+          volumeMounts:
+            - name: {{ $name }}-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: {{ $name }}-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: {{ $name }}-dashboard-config
+              mountPath: /var/lib/grafana/dashboards
+{{- with .Values.grafana.resources }}
+          resources:
+{{ toYaml . | nindent 12 }}
+{{- end }}
+      volumes:
+        - name: {{ $name }}-datasources
+          configMap:
+            name: {{ $name }}-datasources
+        - name: {{ $name }}-dashboards
+          configMap:
+            name: {{ $name }}-dashboard-config
+        - name: {{ $name }}-dashboard-config
+          configMap:
+            name: {{ $name }}-dashboard
+{{- with .Values.grafana.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.grafana.affinity }}
+      affinity:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.grafana.tolerations }}
+      tolerations:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+{{- with .Values.grafana.service.annotations }}
+  annotations:
+{{ toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  type: {{ .Values.grafana.service.type }}
+  selector:
+    app: {{ $name }}
+  ports:
+    - name: http
+      port: {{ .Values.grafana.service.port }}
+      targetPort: {{ .Values.grafana.service.targetPort }}
+{{- end }}

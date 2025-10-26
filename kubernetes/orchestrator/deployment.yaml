@@ -39,6 +39,8 @@ spec:
               value: "1800"
             - name: JOB_TTL_SECONDS
               value: "3600"
+            - name: BASE_PATH
+              value: "localhost"
           resources:
             requests:
               memory: "256Mi"

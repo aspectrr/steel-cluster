@@ -1,0 +1,24 @@
+apiVersion: v2
+name: steel-cluster
+description: A Helm chart for deploying the Steel Cluster stack (browser orchestrator, Redis, Prometheus, Grafana, and ingress)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.23.0-0"
+
+home: https://github.com/steel-dev/steel-cluster
+sources:
+  - https://github.com/steel-dev/steel-cluster
+
+keywords:
+  - orchestrator
+  - browser
+  - redis
+  - prometheus
+  - grafana
+  - ingress
+  - monitoring
+
+maintainers:
+  - name: steel-dev
+    url: https://github.com/steel-dev

@@ -1,0 +1,110 @@
+{{- if .Values.orchestrator.enabled }}
+{{- $ns := include "steel-cluster.namespace" . -}}
+{{- $app := .Values.orchestrator.name | default "browser-orchestrator" -}}
+{{- $saName := include "steel-cluster.orchestrator.serviceAccountName" . -}}
+{{- $image := include "steel-cluster.image" (dict "repository" .Values.orchestrator.image.repository "tag" .Values.orchestrator.image.tag) -}}
+{{- $k8sNs := include "steel-cluster.k8sNamespace" . -}}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $app }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $app }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.orchestrator.replicas }}
+  selector:
+    matchLabels:
+      app: {{ $app }}
+  template:
+    metadata:
+      labels:
+        app: {{ $app }}
+{{ include "steel-cluster.labels" . | nindent 8 }}
+{{- with .Values.orchestrator.podAnnotations }}
+      annotations:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+    spec:
+      serviceAccountName: {{ $saName }}
+{{ include "steel-cluster.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: orchestrator
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          ports:
+            - name: {{ .Values.orchestrator.service.portName | default "http" }}
+              containerPort: {{ .Values.orchestrator.service.targetPort }}
+          env:
+            - name: K8S_NAMESPACE
+              value: {{ $k8sNs | quote }}
+{{- $env := .Values.orchestrator.env | default dict -}}
+{{- range $k, $v := $env }}
+{{- if ne $k "K8S_NAMESPACE" }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+{{- end }}
+{{- end }}
+{{- if .Values.orchestrator.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.orchestrator.livenessProbe.path }}
+              port: {{ .Values.orchestrator.livenessProbe.port }}
+            initialDelaySeconds: {{ .Values.orchestrator.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.orchestrator.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.orchestrator.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.orchestrator.livenessProbe.failureThreshold }}
+            successThreshold: {{ .Values.orchestrator.livenessProbe.successThreshold }}
+{{- end }}
+{{- if .Values.orchestrator.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.orchestrator.readinessProbe.path }}
+              port: {{ .Values.orchestrator.readinessProbe.port }}
+            initialDelaySeconds: {{ .Values.orchestrator.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.orchestrator.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.orchestrator.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.orchestrator.readinessProbe.failureThreshold }}
+            successThreshold: {{ .Values.orchestrator.readinessProbe.successThreshold }}
+{{- end }}
+{{- with .Values.orchestrator.resources }}
+          resources:
+{{ toYaml . | nindent 12 }}
+{{- end }}
+{{- with .Values.orchestrator.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.orchestrator.affinity }}
+      affinity:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+{{- with .Values.orchestrator.tolerations }}
+      tolerations:
+{{ toYaml . | nindent 8 }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $app }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $app }}
+{{ include "steel-cluster.labels" . | nindent 4 }}
+{{- with .Values.orchestrator.service.annotations }}
+  annotations:
+{{ toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  type: {{ .Values.orchestrator.service.type }}
+  selector:
+    app: {{ $app }}
+  ports:
+    - name: {{ .Values.orchestrator.service.portName | default "http" }}
+      port: {{ .Values.orchestrator.service.port }}
+      targetPort: {{ .Values.orchestrator.service.targetPort }}
+{{- end }}

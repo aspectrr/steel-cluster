@@ -1,0 +1,340 @@
+# Default values for the steel-cluster Helm chart.
+# This file controls configurable parameters for deploying:
+# - Browser Orchestrator
+# - Redis
+# - Prometheus
+# - Grafana
+# - Ingress and basic monitoring objects
+
+global:
+  # Optional image pull secrets for all workloads
+  imagePullSecrets: []
+  # Common labels/annotations applied to most resources
+  commonLabels: {}
+  commonAnnotations: {}
+
+namespace:
+  # If true, the chart will create a Namespace resource
+  create: true
+  # Namespace to deploy resources into (used by templates and some env vars)
+  name: browser-sessions
+
+orchestrator:
+  enabled: true
+  name: browser-orchestrator
+
+  image:
+    repository: browser-orchestrator
+    tag: latest
+    # If using a locally built image (e.g., kind/k3d), you may set Never
+    pullPolicy: IfNotPresent
+
+  replicas: 1
+
+  serviceAccount:
+    create: true
+    name: browser-orchestrator
+    annotations: {}
+
+  rbac:
+    # Creates Role and RoleBinding scoped to the namespace for orchestrator
+    create: true
+
+  service:
+    type: ClusterIP
+    port: 3000
+    targetPort: 3000
+    # Name of the service port (also used by ServiceMonitor)
+    portName: http
+    annotations: {}
+
+  # Pod annotations (you can enable Prometheus pod scraping if needed)
+  podAnnotations: {}
+    # prometheus.io/scrape: "true"
+    # prometheus.io/port: "3000"
+    # prometheus.io/path: "/metrics"
+
+  # Container environment variables for the orchestrator
+  env:
+    NODE_ENV: production
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    # Will default to the Helm namespace if left as empty; overridden in templates using .Release.Namespace
+    K8S_NAMESPACE: ""
+    BROWSER_IMAGE: ghcr.io/steel-dev/steel-browser:latest
+    PREWARM_POOL_SIZE: "2"
+    MAX_SESSIONS: "100"
+    SESSION_TIMEOUT: "1800"
+    JOB_TTL_SECONDS: "3600"
+    # Base path/host used by orchestrator if needed by your app logic
+    BASE_PATH: localhost
+
+  # HTTP health endpoints
+  livenessProbe:
+    enabled: true
+    path: /health
+    port: 3000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 3
+    successThreshold: 1
+
+  readinessProbe:
+    enabled: true
+    path: /health
+    port: 3000
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 1
+    failureThreshold: 3
+    successThreshold: 1
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+redis:
+  enabled: true
+  name: redis
+
+  image:
+    repository: redis
+    tag: 8-alpine
+    pullPolicy: IfNotPresent
+
+  replicas: 1
+
+  service:
+    type: ClusterIP
+    port: 6379
+    targetPort: 6379
+    annotations: {}
+
+  # Command-line configuration for Redis
+  config:
+    appendonly: "yes"
+    maxmemory: "256mb"
+    maxmemoryPolicy: "allkeys-lru"
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+  persistence:
+    enabled: false
+    # If enabled, define PVC details here
+    size: 1Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+ingress:
+  enabled: true
+  # Set to the IngressClass in your cluster (e.g., "nginx")
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+  hosts:
+    - host: localhost
+      paths:
+        # Subpath for Grafana
+        - path: /grafana
+          pathType: Prefix
+          service:
+            name: grafana
+            port: 3000
+        # Subpath for Prometheus
+        - path: /prometheus
+          pathType: Prefix
+          service:
+            name: prometheus
+            port: 9090
+        # Root path to orchestrator
+        - path: /
+          pathType: Prefix
+          service:
+            name: browser-orchestrator
+            port: 3000
+  tls: []
+  # - secretName: steel-cluster-tls
+  #   hosts:
+  #     - your.domain.tld
+
+monitoring:
+  # ServiceMonitor resource (Prometheus Operator CRD required)
+  serviceMonitor:
+    enabled: true
+    # Additional labels for the ServiceMonitor
+    labels: {}
+    # Named port to scrape from the orchestrator service
+    portName: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+
+prometheus:
+  enabled: true
+  name: prometheus
+
+  image:
+    repository: prom/prometheus
+    tag: v3.4.2
+    pullPolicy: IfNotPresent
+
+  serviceAccount:
+    create: true
+    name: prometheus
+    annotations: {}
+
+  rbac:
+    # Creates ClusterRole and ClusterRoleBinding for Prometheus scraping
+    create: true
+
+  service:
+    type: ClusterIP
+    port: 9090
+    targetPort: 9090
+    annotations: {}
+
+  # Prometheus web configuration
+  web:
+    # External URL subpath (used behind ingress subpath)
+    externalUrl: /prometheus
+    # Retention time for TSDB
+    retention: 200h
+
+  # Scrape configuration defaults
+  scrape:
+    globalScrapeInterval: 15s
+    globalEvaluationInterval: 15s
+    # Static scrape target for orchestrator service
+    orchestrator:
+      enabled: true
+      serviceName: browser-orchestrator
+      servicePort: 3000
+      metricsPath: /metrics
+      scrapeInterval: 15s
+    # Enables Kubernetes pods discovery in the release namespace with prometheus.io annotations
+    kubernetesPods:
+      enabled: true
+      namespaces:
+        - browser-sessions
+
+  # Storage: default emptyDir; set persistence.enabled=true for PVC
+  storage:
+    persistence:
+      enabled: false
+      size: 5Gi
+      storageClass: ""
+      accessModes:
+        - ReadWriteOnce
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+alerts:
+  enabled: true
+  rules:
+    highSessionCount:
+      enabled: true
+      threshold: 80
+      for: 5m
+      severity: warning
+    sessionCreationFailure:
+      enabled: true
+      increaseWindow: 5m
+      threshold: 5
+      for: 2m
+      severity: critical
+    orchestratorDown:
+      enabled: true
+      for: 1m
+      severity: critical
+    redisDown:
+      enabled: true
+      for: 1m
+      severity: critical
+
+grafana:
+  enabled: true
+  name: grafana
+
+  image:
+    repository: grafana/grafana
+    tag: "12.0.2"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 3000
+    targetPort: 3000
+    annotations: {}
+
+  admin:
+    # WARNING: Change for production!
+    password: admin123
+
+  plugins:
+    # Install the pie chart plugin used by the default dashboard
+    - grafana-piechart-panel
+
+  # Serve grafana from subpath when behind ingress at /grafana
+  server:
+    rootUrl: "%(protocol)s://%(domain)s/grafana"
+    serveFromSubPath: true
+    subPath: /grafana
+
+  datasources:
+    prometheus:
+      # URL to Prometheus service inside the cluster
+      url: http://prometheus:9090
+      isDefault: true
+
+  # Dashboard provisioning
+  dashboards:
+    enabled: true
+    # leave as-is to use the provided dashboard
+    browserSessions:
+      enabled: true
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "200m"
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

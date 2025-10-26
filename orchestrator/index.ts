@@ -16,6 +16,7 @@ import {
   V1Probe,
   V1HTTPGetAction,
 } from "@kubernetes/client-node";
+import { startServer } from "./src/server";
 
 // =========================
 /* Environment / Configuration */
@@ -30,8 +31,8 @@ const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 const K8S_NAMESPACE = process.env.K8S_NAMESPACE || "browser-sessions";
 
 // Browser container image and port
-const BROWSER_IMAGE =
-  process.env.BROWSER_IMAGE || "ghcr.io/steel-dev/steel-browser:latest";
+const BROWSER_IMAGE = "steel-browser-cluster:latest";
+// process.env.BROWSER_IMAGE || "ghcr.io/steel-dev/steel-browser:latest";
 const BROWSER_PORT = Number(process.env.BROWSER_PORT || 3000);
 const RAW_BASE_PATH = process.env.BASE_PATH || "";
 const BASE_PATH =
@@ -42,7 +43,7 @@ const SESSION_TIMEOUT_DEFAULT = Number(process.env.SESSION_TIMEOUT || 1800); // 
 const MAX_SESSIONS = Number(process.env.MAX_SESSIONS || 100);
 
 // Prewarm pool
-const PREWARM_POOL_SIZE = Number(process.env.PREWARM_POOL_SIZE || 2);
+// const PREWARM_POOL_SIZE = Number(process.env.PREWARM_POOL_SIZE || 2);
 
 // Resource requests/limits (optional)
 const POD_MEMORY_REQUEST = process.env.POD_MEMORY_REQUEST || "256Mi";
@@ -66,9 +67,9 @@ const READINESS_TIMEOUT_SECONDS = Number(
 
 // Janitor tuning
 const JANITOR_INTERVAL_MS = Number(process.env.JANITOR_INTERVAL_MS || 15000);
-const PREWARM_CHECK_INTERVAL_MS = Number(
-  process.env.PREWARM_CHECK_INTERVAL_MS || 20000,
-);
+// const PREWARM_CHECK_INTERVAL_MS = Number(
+//   process.env.PREWARM_CHECK_INTERVAL_MS || 20000,
+// );
 
 // =========================
 /* Types */
@@ -220,7 +221,7 @@ function browserServiceHost(sessionId: string): string {
 
 function makeReadinessProbe(): V1Probe {
   const httpGet: V1HTTPGetAction = {
-    path: "/health",
+    path: "/v1/health",
     port: BROWSER_PORT,
     scheme: "HTTP",
   };
@@ -244,9 +245,9 @@ function makeContainerPorts(): V1ContainerPort[] {
   ];
 }
 
-function makePrewarmPodName(): string {
-  return `browser-prewarm-${uuidv4()}`;
-}
+// function makePrewarmPodName(): string {
+//   return `browser-prewarm-${uuidv4()}`;
+// }
 
 function makeSessionPodName(sessionId: string): string {
   return `browser-session-${sessionId}`;
@@ -256,54 +257,56 @@ function makeSessionServiceName(sessionId: string): string {
   return `browser-session-${sessionId}`;
 }
 
-async function createPrewarmPod(): Promise<string> {
-  const name = makePrewarmPodName();
-  const pod: V1Pod = {
-    apiVersion: "v1",
-    kind: "Pod",
-    metadata: {
-      name,
-      namespace: K8S_NAMESPACE,
-      labels: {
-        app: "browser-session",
-        role: "prewarm",
-        podName: name,
-      },
-    },
-    spec: {
-      restartPolicy: "Always",
-      containers: [
-        {
-          name: "browser",
-          image: BROWSER_IMAGE,
-          imagePullPolicy: "IfNotPresent",
-          env: [
-            { name: "PORT", value: String(BROWSER_PORT) },
-            { name: "NODE_ENV", value: "production" },
-          ],
-          ports: makeContainerPorts(),
-          readinessProbe: makeReadinessProbe(),
-          resources: {
-            requests: { memory: POD_MEMORY_REQUEST, cpu: POD_CPU_REQUEST },
-            limits: { memory: POD_MEMORY_LIMIT, cpu: POD_CPU_LIMIT },
-          },
-        },
-      ],
-      ...(IMAGE_PULL_SECRET
-        ? {
-            imagePullSecrets: [{ name: IMAGE_PULL_SECRET }],
-          }
-        : {}),
-    },
-  };
+// async function createPrewarmPod(): Promise<string> {
+//   const name = makePrewarmPodName();
+//   const pod: V1Pod = {
+//     apiVersion: "v1",
+//     kind: "Pod",
+//     metadata: {
+//       name,
+//       namespace: K8S_NAMESPACE,
+//       labels: {
+//         app: "browser-session",
+//         role: "prewarm",
+//         podName: name,
+//         "app.kubernetes.io/name": "browser-session",
+//         "app.kubernetes.io/component": "prewarm",
+//       },
+//     },
+//     spec: {
+//       restartPolicy: "Always",
+//       containers: [
+//         {
+//           name: "browser",
+//           image: BROWSER_IMAGE,
+//           imagePullPolicy: "IfNotPresent",
+//           env: [
+//             { name: "PORT", value: String(BROWSER_PORT) },
+//             { name: "NODE_ENV", value: "production" },
+//           ],
+//           ports: makeContainerPorts(),
+//           readinessProbe: makeReadinessProbe(),
+//           resources: {
+//             requests: { memory: POD_MEMORY_REQUEST, cpu: POD_CPU_REQUEST },
+//             limits: { memory: POD_MEMORY_LIMIT, cpu: POD_CPU_LIMIT },
+//           },
+//         },
+//       ],
+//       ...(IMAGE_PULL_SECRET
+//         ? {
+//             imagePullSecrets: [{ name: IMAGE_PULL_SECRET }],
+//           }
+//         : {}),
+//     },
+//   };
 
-  await core.createNamespacedPod({
-    namespace: K8S_NAMESPACE,
-    body: pod,
-  } as any);
-  fastify.log.info({ name }, "Created prewarm pod");
-  return name;
-}
+//   await core.createNamespacedPod({
+//     namespace: K8S_NAMESPACE,
+//     body: pod,
+//   } as any);
+//   fastify.log.info({ name }, "Created prewarm pod");
+//   return name;
+// }
 
 async function createSessionPod(sessionId: string): Promise<string> {
   const name = makeSessionPodName(sessionId);
@@ -330,6 +333,8 @@ async function createSessionPod(sessionId: string): Promise<string> {
           env: [
             { name: "PORT", value: String(BROWSER_PORT) },
             { name: "NODE_ENV", value: "production" },
+            { name: "BASE_PATH", value: `/sessions/${sessionId}` },
+            // { name: "API_URL", value: "http://localhost" },
           ],
           ports: makeContainerPorts(),
           readinessProbe: makeReadinessProbe(),
@@ -369,11 +374,13 @@ async function createSessionService(
       namespace: K8S_NAMESPACE,
       labels: {
         app: "browser-session",
-        role: "active",
         sessionId,
       },
       annotations: {
         "steel/sessionId": sessionId,
+        ...(selector.podName
+          ? { "steel/targetPodName": selector.podName }
+          : {}),
         ...(annotations || {}),
       },
     },
@@ -428,21 +435,56 @@ async function deletePod(name: string): Promise<void> {
 }
 
 async function listPrewarmPods(): Promise<V1Pod[]> {
-  const res: any = await core.listNamespacedPod({
+  const podsAllRes: any = await core.listNamespacedPod({
     namespace: K8S_NAMESPACE,
-    labelSelector: "app=browser-session,role=prewarm",
   } as any);
-  const list = (res.body || res.data)?.items || [];
-  return list as V1Pod[];
+  const all = (podsAllRes.body || podsAllRes.data)?.items || [];
+
+  const byLabel = all.filter(
+    (p: any) =>
+      p.metadata?.labels?.app === "browser-session" &&
+      p.metadata?.labels?.role === "prewarm",
+  );
+  const byPrefix = all.filter((p: any) =>
+    (p.metadata?.name || "").startsWith("browser-prewarm-"),
+  );
+
+  const unionMap: Record<string, any> = {};
+  for (const p of [...byLabel, ...byPrefix]) {
+    const n = p.metadata?.name;
+    if (n) {
+      unionMap[n] = p;
+    }
+  }
+  const list = Object.values(unionMap) as V1Pod[];
+  return list;
 }
 
 async function listActiveServices(): Promise<V1Service[]> {
-  const res: any = await core.listNamespacedService({
+  const svcsAllRes: any = await core.listNamespacedService({
     namespace: K8S_NAMESPACE,
-    labelSelector: "app=browser-session,role=active",
   } as any);
-  const list = (res.body || res.data)?.items || [];
-  return list as V1Service[];
+  const all = (svcsAllRes.body || svcsAllRes.data)?.items || [];
+
+  const byAnnotation = all.filter(
+    (s: any) => s.metadata?.annotations?.["steel/sessionId"],
+  );
+  const byLabel = all.filter(
+    (s: any) => s.metadata?.labels?.app === "browser-session",
+  );
+  const byPrefix = all.filter((s: any) =>
+    (s.metadata?.name || "").startsWith("browser-session-"),
+  );
+
+  const serviceUnionMap: Record<string, any> = {};
+  for (const s of [...byAnnotation, ...byLabel, ...byPrefix]) {
+    const n = s.metadata?.name;
+    if (n) {
+      serviceUnionMap[n] = s;
+    }
+  }
+  const list = Object.values(serviceUnionMap) as V1Service[];
+  return list;
 }
 
 function isPodReady(pod: V1Pod): boolean {
@@ -460,7 +502,7 @@ async function waitForServiceReadiness(
 
   while (Date.now() < deadline) {
     try {
-      const url = `http://${fqdn}:${BROWSER_PORT}/health`;
+      const url = `http://${fqdn}:${BROWSER_PORT}/v1/health`;
       const res = await axios.get(url, { timeout: 3000 });
       if (res.status >= 200 && res.status < 300) {
         return;
@@ -476,93 +518,217 @@ async function waitForServiceReadiness(
   );
 }
 
-async function ensurePrewarmPool(): Promise<void> {
-  // Simple Redis-based lock to avoid overshoot with multiple orchestrator instances
-  const lockKey = "prewarm:lock";
-  const lockTtlMs = 30000;
-  const token = uuidv4();
+// async function ensurePrewarmPool(): Promise<void> {
+//   // Simple Redis-based lock to avoid overshoot with multiple orchestrator instances
+//   const lockKey = "prewarm:lock";
+//   const lockTtlMs = 30000;
+//   const token = uuidv4();
 
-  try {
-    // Acquire lock (SET NX PX)
-    const acquired = await redis.set(lockKey, token, {
-      NX: true,
-      PX: lockTtlMs,
-    });
-    if (!acquired) {
-      return;
-    }
+//   try {
+//     // Acquire lock (SET NX PX)
+//     const acquired = await redis.set(lockKey, token, {
+//       NX: true,
+//       PX: lockTtlMs,
+//     });
+//     if (!acquired) {
+//       return;
+//     }
 
-    const [pods, services] = await Promise.all([
-      listPrewarmPods(),
-      listActiveServices(),
-    ]);
+//     const [pods, services] = await Promise.all([
+//       listPrewarmPods(),
+//       listActiveServices(),
+//     ]);
 
-    // Pods targeted by an active Service (handoff in-use)
-    const targeted = new Set<string>(
-      services
-        .map((s) => s.metadata?.annotations?.["steel/targetPodName"])
-        .filter((n): n is string => !!n),
-    );
+//     if (pods.length === 0) {
+//       // Fallback scan without selector to diagnose issues
+//       const podsAllRes: any = await core.listNamespacedPod({
+//         namespace: K8S_NAMESPACE,
+//       } as any);
+//       const podsAll = (podsAllRes.body || podsAllRes.data)?.items || [];
+//       fastify.log.warn(
+//         {
+//           ns: K8S_NAMESPACE,
+//           selector: "app=browser-session,role=prewarm",
+//           allCount: podsAll.length,
+//           sample: podsAll.map((p: any) => p.metadata?.name).slice(0, 10),
+//         },
+//         "No prewarm pods matched selector; fallback scan",
+//       );
+//     }
 
-    // Consider all non-terminating prewarm pods, not just Ready, to avoid overshoot
-    const nonTerminating = pods.filter(
-      (p) =>
-        !p.metadata?.deletionTimestamp &&
-        p.status?.phase !== "Failed" &&
-        p.status?.phase !== "Succeeded",
-    );
+//     if (services.length === 0) {
+//       const svcsAllRes: any = await core.listNamespacedService({
+//         namespace: K8S_NAMESPACE,
+//       } as any);
+//       const svcsAll = (svcsAllRes.body || svcsAllRes.data)?.items || [];
+//       fastify.log.warn(
+//         {
+//           ns: K8S_NAMESPACE,
+//           selector: "app=browser-session,role=active",
+//           allCount: svcsAll.length,
+//           sample: svcsAll.map((s: any) => s.metadata?.name).slice(0, 10),
+//         },
+//         "No active services matched selector; fallback scan",
+//       );
+//     }
 
-    // Free = not targeted by any active session service
-    const freeNonTerminating = nonTerminating.filter((p) => {
-      const n = p.metadata?.name;
-      return !!n && !targeted.has(n);
-    });
+//     // Pods targeted by an active Service (handoff in-use)
+//     const targeted = new Set<string>(
+//       services
+//         .map((s) => s.metadata?.annotations?.["steel/targetPodName"])
+//         .filter((n): n is string => !!n),
+//     );
 
-    const currentCount = freeNonTerminating.length;
+//     // Consider all non-terminating prewarm pods, not just Ready, to avoid overshoot
+//     const nonTerminating = pods.filter(
+//       (p) =>
+//         !p.metadata?.deletionTimestamp &&
+//         p.status?.phase !== "Failed" &&
+//         p.status?.phase !== "Succeeded",
+//     );
 
-    if (currentCount < PREWARM_POOL_SIZE) {
-      const toCreate = PREWARM_POOL_SIZE - currentCount;
-      for (let i = 0; i < toCreate; i++) {
-        await createPrewarmPod();
-      }
-    } else if (currentCount > PREWARM_POOL_SIZE) {
-      // Prefer trimming oldest Ready free prewarms first; fallback to any free non-terminating
-      const freeReady = freeNonTerminating.filter((p) => isPodReady(p));
-      const candidates =
-        freeReady.length > 0 ? freeReady.slice() : freeNonTerminating.slice();
+//     // Free = not targeted by any active session service
+//     const freeNonTerminating = nonTerminating.filter((p) => {
+//       const n = p.metadata?.name;
+//       return !!n && !targeted.has(n);
+//     });
 
-      const sorted = candidates.sort((a, b) => {
-        const ta = new Date(a.metadata?.creationTimestamp || 0).getTime();
-        const tb = new Date(b.metadata?.creationTimestamp || 0).getTime();
-        return ta - tb;
-      });
-      const extras = sorted.slice(0, currentCount - PREWARM_POOL_SIZE);
-      for (const p of extras) {
-        if (p.metadata?.name) {
-          await deletePod(p.metadata.name);
-        }
-      }
-    }
-  } catch (err) {
-    fastify.log.warn({ err }, "ensurePrewarmPool failed");
-  } finally {
-    // Release lock safely
-    try {
-      const val = await redis.get(lockKey);
-      if (val === token) {
-        await redis.del(lockKey);
-      }
-    } catch (e) {
-      fastify.log.warn({ err: e }, "Failed to release prewarm lock");
-    }
-  }
-}
+//     const currentCount = freeNonTerminating.length;
+//     fastify.log.info(
+//       {
+//         ns: K8S_NAMESPACE,
+//         totals: {
+//           prewarmPods: pods.length,
+//           nonTerminating: nonTerminating.length,
+//           targeted: targeted.size,
+//           free: currentCount,
+//           desired: PREWARM_POOL_SIZE,
+//         },
+//       },
+//       "Prewarm pool state",
+//     );
 
-async function pickPrewarmPod(): Promise<V1Pod | null> {
-  const pods = await listPrewarmPods();
-  const ready = pods.filter((p) => isPodReady(p));
-  return ready[0] || null;
-}
+//     if (currentCount < PREWARM_POOL_SIZE) {
+//       const toCreate = PREWARM_POOL_SIZE - currentCount;
+//       fastify.log.info(
+//         {
+//           ns: K8S_NAMESPACE,
+//           toCreate,
+//           free: currentCount,
+//           desired: PREWARM_POOL_SIZE,
+//         },
+//         "Creating prewarm pods to maintain free pool",
+//       );
+//       for (let i = 0; i < toCreate; i++) {
+//         await createPrewarmPod();
+//       }
+//     } else if (currentCount > PREWARM_POOL_SIZE) {
+//       // Prefer trimming oldest Ready free prewarms first; fallback to any free non-terminating
+//       const freeReady = freeNonTerminating.filter((p) => isPodReady(p));
+//       const candidates =
+//         freeReady.length > 0 ? freeReady.slice() : freeNonTerminating.slice();
+
+//       const sorted = candidates.sort((a, b) => {
+//         const ta = new Date(a.metadata?.creationTimestamp || 0).getTime();
+//         const tb = new Date(b.metadata?.creationTimestamp || 0).getTime();
+//         return ta - tb;
+//       });
+//       const extras = sorted.slice(0, currentCount - PREWARM_POOL_SIZE);
+//       fastify.log.info(
+//         {
+//           ns: K8S_NAMESPACE,
+//           toTrim: extras.length,
+//           free: currentCount,
+//           desired: PREWARM_POOL_SIZE,
+//         },
+//         "Trimming extra free prewarm pods",
+//       );
+//       for (const p of extras) {
+//         if (p.metadata?.name) {
+//           await deletePod(p.metadata.name);
+//         }
+//       }
+//     }
+//   } catch (err) {
+//     fastify.log.warn({ err }, "ensurePrewarmPool failed");
+//   } finally {
+//     // Release lock safely
+//     try {
+//       const val = await redis.get(lockKey);
+//       if (val === token) {
+//         await redis.del(lockKey);
+//       }
+//     } catch (e) {
+//       fastify.log.warn({ err: e }, "Failed to release prewarm lock");
+//     }
+//   }
+// }
+
+// async function pickPrewarmPod(): Promise<V1Pod | null> {
+//   const [pods, services] = await Promise.all([
+//     listPrewarmPods(),
+//     listActiveServices(),
+//   ]);
+
+//   if (pods.length === 0) {
+//     const podsAllRes: any = await core.listNamespacedPod({
+//       namespace: K8S_NAMESPACE,
+//     } as any);
+//     const podsAll = (podsAllRes.body || podsAllRes.data)?.items || [];
+//     fastify.log.warn(
+//       {
+//         ns: K8S_NAMESPACE,
+//         selector: "app=browser-session,role=prewarm",
+//         allCount: podsAll.length,
+//         sample: podsAll.map((p: any) => p.metadata?.name).slice(0, 10),
+//       },
+//       "No prewarm pods matched selector in pickPrewarmPod; fallback scan",
+//     );
+//   }
+
+//   // Pods already targeted by an active session service should be excluded from selection
+//   const targeted = new Set<string>(
+//     services
+//       .map((s) => s.metadata?.annotations?.["steel/targetPodName"])
+//       .filter((n): n is string => !!n),
+//   );
+
+//   // Consider only non-terminating prewarm pods that are not targeted
+//   const free = pods.filter(
+//     (p) =>
+//       !!p.metadata?.name &&
+//       !targeted.has(p.metadata.name) &&
+//       !p.metadata?.deletionTimestamp &&
+//       p.status?.phase !== "Failed" &&
+//       p.status?.phase !== "Succeeded",
+//   );
+
+//   const readyFree = free.filter((p) => isPodReady(p));
+//   const chosen = readyFree[0] || free[0] || null;
+
+//   if (!chosen) {
+//     fastify.log.info(
+//       {
+//         ns: K8S_NAMESPACE,
+//         prewarms: pods.length,
+//         targeted: targeted.size,
+//         free: free.length,
+//       },
+//       "No free prewarm pod available",
+//     );
+//   } else {
+//     fastify.log.info(
+//       {
+//         ns: K8S_NAMESPACE,
+//         chosen: chosen.metadata?.name,
+//         ready: isPodReady(chosen),
+//       },
+//       "Selected prewarm pod",
+//     );
+//   }
+
+//   return chosen;
+// }
 
 // Cleanup orphaned resources for expired sessions
 async function cleanupOrphans(): Promise<void> {
@@ -645,43 +811,43 @@ fastify.post<{
   }
 
   // Hand off to prewarm if available, otherwise create a dedicated pod
-  const prewarm = await pickPrewarmPod();
-  if (prewarm && prewarm.metadata?.name) {
-    podName = prewarm.metadata.name;
-    session.podName = podName;
+  // const prewarm = await pickPrewarmPod();
+  // if (prewarm && prewarm.metadata?.name) {
+  //   podName = prewarm.metadata.name;
+  //   session.podName = podName;
 
-    // Create a service that selects this specific pod via a unique label
-    // Prewarm pods are created with label podName=<metadata.name>
-    await createSessionService(
-      sessionId,
-      { podName },
-      {
-        "steel/targetPodName": podName,
-        "steel/handOff": "prewarm",
-      },
-    );
+  //   // Create a service that selects this specific pod via a unique label
+  //   // Prewarm pods are created with label podName=<metadata.name>
+  //   await createSessionService(
+  //     sessionId,
+  //     { podName },
+  //     {
+  //       "steel/targetPodName": podName,
+  //       "steel/handOff": "prewarm",
+  //     },
+  //   );
 
-    // Wait for readiness on the service (should be immediate since pod is ready)
-    try {
-      await waitForServiceReadiness(serviceName, READINESS_TIMEOUT_SECONDS);
-      session.status = "running";
-      await saveSession(session);
-      return {
-        sessionId,
-        status: "running",
-        serviceHost,
-        serviceName,
-        podName,
-      };
-    } catch (err: any) {
-      session.status = "failed";
-      session.notes = `Prewarm handoff readiness failed: ${String(err?.message || err)}`;
-      await saveSession(session);
-      // cleanup service (pod remains as prewarm will be recycled or deleted later)
-      await deleteService(serviceName);
-      return { sessionId, status: "failed", error: session.notes };
-    }
-  }
+  //   // Wait for readiness on the service (should be immediate since pod is ready)
+  //   try {
+  //     await waitForServiceReadiness(serviceName, READINESS_TIMEOUT_SECONDS);
+  //     session.status = "running";
+  //     await saveSession(session);
+  //     return {
+  //       sessionId,
+  //       status: "running",
+  //       serviceHost,
+  //       serviceName,
+  //       podName,
+  //     };
+  //   } catch (err: any) {
+  //     session.status = "failed";
+  //     session.notes = `Prewarm handoff readiness failed: ${String(err?.message || err)}`;
+  //     await saveSession(session);
+  //     // cleanup service (pod remains as prewarm will be recycled or deleted later)
+  //     await deleteService(serviceName);
+  //     return { sessionId, status: "failed", error: session.notes };
+  //   }
+  // }
 
   // Create dedicated session pod
   podName = await createSessionPod(sessionId);
@@ -784,17 +950,24 @@ fastify.get("/health", async () => {
     return {
       status: "ok",
       sessions: sessions.length,
+      namespace: K8S_NAMESPACE,
+      basePath: BASE_PATH,
       timestamp: new Date().toISOString(),
     };
   } catch (err) {
-    return { status: "unhealthy", error: String(err) };
+    return {
+      status: "unhealthy",
+      error: String(err),
+      namespace: K8S_NAMESPACE,
+      basePath: BASE_PATH,
+    };
   }
 });
 
 fastify.get("/", async (_request, reply) => {
   reply.type("text/html");
   const base = BASE_PATH || "";
-  return `<html><body><h1>Steel Browser Orchestrator</h1><ul><li><a href="${base}/sessions">Sessions</a></li><li><a href="${base}/health">Health</a></li><li><a href="${base}/docs">Docs</a></li></ul></body></html>`;
+  return `<html><body><h1>Steel Browser Orchestrator</h1><p>Namespace: ${K8S_NAMESPACE} • Base path: ${base || "/"}</p><ul><li><a href="${base}/sessions">Sessions</a></li><li><a href="${base}/health">Health</a></li><li><a href="${base}/docs">Docs</a></li></ul></body></html>`;
 });
 // Dynamic proxy to per-session service
 async function proxyToSession(
@@ -850,11 +1023,11 @@ fastify.all("/sessions/:sessionId/*", async (request, reply) => {
 
 async function startBackgroundWorkers(): Promise<void> {
   // Prewarm ensure loop
-  setInterval(() => {
-    ensurePrewarmPool().catch((err) =>
-      fastify.log.warn({ err }, "Prewarm loop error"),
-    );
-  }, PREWARM_CHECK_INTERVAL_MS).unref();
+  // setInterval(() => {
+  //   ensurePrewarmPool().catch((err) =>
+  //     fastify.log.warn({ err }, "Prewarm loop error"),
+  //   );
+  // }, PREWARM_CHECK_INTERVAL_MS).unref();
 
   // Janitor loop for orphans and general cleanup
   setInterval(() => {
@@ -864,7 +1037,7 @@ async function startBackgroundWorkers(): Promise<void> {
   }, JANITOR_INTERVAL_MS).unref();
 
   // Initial bootstrap
-  await ensurePrewarmPool();
+  // await ensurePrewarmPool();
   await cleanupOrphans();
 }
 
@@ -874,44 +1047,10 @@ async function startBackgroundWorkers(): Promise<void> {
 
 async function start(): Promise<void> {
   console.log("Starting orchestrator...");
-  // Wait for the Redis Service to have ready endpoints (avoids DNS/endpoint flaps)
-  // const waitEndpoints = async (name: string, timeoutSeconds: number) => {
-  //   const deadline = Date.now() + timeoutSeconds * 1000;
-  //   let lastErr: unknown = null;
-  //   while (Date.now() < deadline) {
-  //     try {
-  //       const res: any = await core.readNamespacedEndpoints({
-  //         name,
-  //         namespace: K8S_NAMESPACE,
-  //       } as any);
-  //       const endpoints = (res.body || res.data) as {
-  //         subsets?: Array<{
-  //           addresses?: Array<unknown>;
-  //           readyAddresses?: Array<unknown>;
-  //           notReadyAddresses?: Array<unknown>;
-  //         }>;
-  //       };
-  //       const subsets = endpoints?.subsets || [];
-  //       const hasAddr = subsets.some(
-  //         (s) =>
-  //           (s.addresses && s.addresses.length > 0) ||
-  //           (s.readyAddresses && s.readyAddresses.length > 0),
-  //       );
-  //       if (hasAddr) {
-  //         return;
-  //       }
-  //     } catch (e) {
-  //       lastErr = e;
-  //     }
-  //     await new Promise((r) => setTimeout(r, 1000));
-  //   }
-  //   throw new Error(
-  //     `Timed out waiting for endpoints for service "${name}" (${String(lastErr)})`,
-  //   );
-  // };
-
-  // Ensure the K8s Endpoints object for Redis reports at least one ready address
-  // await waitEndpoints("redis", 120);
+  fastify.log.info(
+    { namespace: K8S_NAMESPACE, basePath: BASE_PATH },
+    "Startup configuration",
+  );
 
   // Ensure Redis client is connected (with internal retries)
   await ensureRedisConnected();
@@ -935,8 +1074,7 @@ async function start(): Promise<void> {
   fastify.log.info(`Orchestrator listening on ${PORT}`);
 }
 
-start().catch((err) => {
+startServer().catch((err) => {
   // eslint-disable-next-line no-console
-  console.error("Failed to start server:", err);
-  // process.exit(1);
+  console.error("Failed to start orchestrator server:", err);
 });
