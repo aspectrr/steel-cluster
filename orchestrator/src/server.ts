@@ -100,7 +100,7 @@ function registerRoutes(fastify: FastifyInstance): void {
     const serviceHost = browserServiceHost(sessionId);
 
     const session: SessionData = {
-      sessionId,
+      id: sessionId,
       status: "pending",
       createdAt: new Date().toISOString(),
       lastUsed: new Date().toISOString(),
@@ -224,10 +224,10 @@ function registerRoutes(fastify: FastifyInstance): void {
         const s = await getSession(request.params.sessionId);
         if (s.status !== "live") {
           reply.type("text/html");
-          return `<html><body><h1>Session ${s.sessionId}</h1><p>Status: ${s.status}</p></body></html>`;
+          return `<html><body><h1>Session ${s.id}</h1><p>Status: ${s.status}</p></body></html>`;
         }
         // Redirect to proxied root path to keep UI behavior consistent
-        return reply.redirect(`${BASE_PATH || ""}/sessions/${s.sessionId}/`);
+        return reply.redirect(`${BASE_PATH || ""}/sessions/${s.id}/`);
       } catch (err: any) {
         reply.code(404).type("text/html");
         return `<html><body><h1>Session Not Found</h1><p>${String(

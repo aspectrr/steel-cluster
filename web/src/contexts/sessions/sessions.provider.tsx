@@ -18,8 +18,8 @@ import {
   // getSessionLogs,
   // GetSessionLogsResponse,
   getSessions,
-  // releaseSession,
-  // ReleaseSessionResponse,
+  releaseSession,
+  ReleaseSessionResponse,
   SessionResponse,
   SessionsResponse,
 } from "@/steel-client";
@@ -74,7 +74,6 @@ export function SessionsProvider({
       },
     );
 
-  // useSession — v3 positional API + data type coercion
   const useSession = (sessionId: string) =>
     useQuery<SessionResponse | null, ErrorResponse>(
       ["session", sessionId],
@@ -192,7 +191,6 @@ export function SessionsProvider({
   //   [],
   // );
 
-  // useCreateSessionMutation — v3 positional API
   const useCreateSessionMutation = useCallback(
     () =>
       useMutation<SessionResponse, ErrorResponse, CreateSessionRequest>(
@@ -238,27 +236,39 @@ export function SessionsProvider({
     [toast, navigate],
   );
 
-  // const useReleaseSessionMutation = useCallback(
-  //   () =>
-  //     useMutation<ReleaseSessionResponse, ErrorResponse, string>({
-  //       mutationFn: async (id: string) => {
-  //         const { error, data } = await releaseSession({
-  //           path: {
-  //             id,
-  //           },
-  //         });
-  //         if (error) {
-  //           throw error;
-  //         }
-  //         queryClient.refetchQueries({ queryKey: ["session", id] });
-  //         return data;
-  //       },
-  //       onSuccess: () => {
-  //         queryClient.invalidateQueries({ queryKey: ["sessions"] });
-  //       },
-  //     }),
-  //   [],
-  // );
+  const useReleaseSessionMutation = useCallback(
+    () =>
+      useMutation<ReleaseSessionResponse, ErrorResponse, string>(
+        async (sessionId: string) => {
+          const { error, data } = await releaseSession({
+            path: {
+              sessionId,
+            },
+          });
+          if (error) {
+            throw error;
+          }
+          queryClient.refetchQueries({ queryKey: ["session", sessionId] });
+          return data as unknown as ReleaseSessionResponse;
+        },
+        {
+          onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["sessions"] });
+          },
+          onError: (error: ErrorResponse) => {
+            const errorMessage =
+              error?.message || "An unknown error occurred. Please try again.";
+            toast({
+              title: "Failed to release session",
+              description: errorMessage,
+              className:
+                "text-[var(--sand-12)] border border-[var(--red-a6)] bg-[var(--red-a3)] ",
+            });
+          },
+        },
+      ),
+    [],
+  );
 
   const contextValue = useMemo(
     () => ({
@@ -268,7 +278,7 @@ export function SessionsProvider({
       // useSessionLogs,
       // useSessionEvents,
       useCreateSessionMutation,
-      // useReleaseSessionMutation,
+      useReleaseSessionMutation,
       // useLegacySessionEvents,
     }),
     [
@@ -278,7 +288,7 @@ export function SessionsProvider({
       // useSessionLogs,
       // useSessionEvents,
       useCreateSessionMutation,
-      // useReleaseSessionMutation,
+      useReleaseSessionMutation,
       // useLegacySessionEvents,
     ],
   );

@@ -190,6 +190,22 @@ export type SessionRequest = {
   url: "/sessions/{sessionId}";
 };
 
+export type SessionReleaseRequest = {
+  body?: never;
+  path: {
+    sessionId: string;
+  };
+  query?: never;
+  url: "/sessions/{sessionId}/release";
+};
+
+export type ReleaseSessionResponse = {
+  success: boolean;
+  sessionId: string;
+  status: string;
+  error?: string;
+};
+
 export type SessionResponse = {
   /**
    * Unique identifier for the session

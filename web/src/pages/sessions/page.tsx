@@ -16,8 +16,6 @@ export function SessionsPage() {
   const { data, error, isLoading: isSessionsLoading } = useSessions();
   const plan = "hobby";
 
-  console.log("DATAL: ", data);
-
   const isLoading = isSessionsLoading;
 
   if (error) return <div>Error: {error?.message}</div>;
@@ -25,8 +23,6 @@ export function SessionsPage() {
   const sessions = isLive
     ? data?.sessions.filter((session) => session.status === "live")
     : data?.sessions;
-
-  console.log("SESSIONS", sessions);
 
   return (
     <div className="flex flex-col overflow-y-hidden items-center justify-center flex-1 w-full">

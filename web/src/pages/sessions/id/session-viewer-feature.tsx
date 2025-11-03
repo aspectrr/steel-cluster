@@ -15,7 +15,5 @@ export function SessionViewerFeature(props: SessionViewerProps) {
     return <SessionViewer {...props} />;
   }
 
-  return (
-    <LegacySessionViewer {...props} />
-  );
+  return <LegacySessionViewer {...props} />;
 }

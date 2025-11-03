@@ -7,7 +7,7 @@
 /**
  * Session lifecycle states.
  */
-export type SessionStatus = "pending" | "live" | "failed";
+export type SessionStatus = "pending" | "live" | "released" | "failed";
 
 /**
  * ISO 8601 / RFC 3339 timestamp string (UTC recommended).
@@ -21,7 +21,7 @@ export interface SessionData {
   /**
    * Stable session identifier (UUID v4).
    */
-  sessionId: string;
+  id: string;
 
   /**
    * Current state of the session.

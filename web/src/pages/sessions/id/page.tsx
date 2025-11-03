@@ -1,5 +1,4 @@
 import { ArrowLeftIcon, ArrowRightIcon } from "@radix-ui/react-icons";
-import { usePostHog } from "posthog-js/react";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 
@@ -13,7 +12,6 @@ import { SessionViewerFeature } from "./session-viewer-feature";
 
 export function SessionPage() {
   const { id } = useParams();
-  const posthog = usePostHog();
   const { useSession } = useSessionsContext();
   const { data: session, isLoading, isError, error } = useSession(id!);
   const [showConsole, setShowConsole] = useState(true);
@@ -34,11 +32,6 @@ export function SessionPage() {
       />
     );
   }
-
-  posthog.capture("session-viewed", {
-    session_id: id,
-    session_status: session.status,
-  });
 
   return (
     <div className="flex flex-col overflow-hidden items-center justify-center h-full w-full p-4">

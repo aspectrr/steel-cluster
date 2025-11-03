@@ -55,11 +55,11 @@ export function sessionKey(sessionId: string): string {
  * - Index set receives a coarse TTL of max(session.timeoutSeconds, 3600)
  */
 export async function saveSession(session: SessionData): Promise<void> {
-  const key = sessionKey(session.sessionId);
+  const key = sessionKey(session.id);
   // Persist the session with TTL
   await redis.setEx(key, session.timeoutSeconds, JSON.stringify(session));
   // Maintain an index of active session IDs for optional listing
-  await redis.sAdd(SESSION_INDEX_KEY, session.sessionId);
+  await redis.sAdd(SESSION_INDEX_KEY, session.id);
   await redis.expire(SESSION_INDEX_KEY, Math.max(session.timeoutSeconds, 3600));
 }
 

@@ -33,6 +33,7 @@ import type {
   PutSessionsBySessionIdBy__Responses,
   TraceSessionsBySessionIdBy__Data,
   TraceSessionsBySessionIdBy__Responses,
+  SessionReleaseRequest,
 } from "./types.gen";
 
 export type Options<
@@ -74,6 +75,19 @@ export const createSession = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: "/v1/sessions",
+    ...options,
+  });
+};
+
+export const releaseSession = <ThrowOnError extends boolean = false>(
+  options?: Options<SessionReleaseRequest, ThrowOnError>,
+) => {
+  return (options?.client ?? client).post<
+    SessionReleaseRequest,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/v1/sessions/{sessionId}/release",
     ...options,
   });
 };
