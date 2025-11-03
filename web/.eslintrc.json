@@ -1,0 +1,11 @@
+{
+  "root": true,
+  "extends": [
+    "@steel/eslint-config/react.js",
+    "@steel/eslint-config/import-sort.js",
+    "@steel/eslint-config/base.js"
+  ],
+  "globals": {
+    "React": "readonly"
+  }
+}

@@ -4,7 +4,11 @@ import Fastify, {
   type FastifyRequest,
 } from "fastify";
 import replyFrom from "@fastify/reply-from";
+import fastifyScalar from "@scalar/fastify-api-reference";
+import fastifySwagger from "@fastify/swagger";
+import fastifyCors from "@fastify/cors";
 import { v4 as uuidv4 } from "uuid";
+// import fs from "fs";
 
 import {
   PORT,
@@ -14,7 +18,7 @@ import {
   READINESS_TIMEOUT_SECONDS,
   K8S_NAMESPACE,
   BROWSER_PORT,
-} from "./config";
+} from "./config.js";
 import {
   ensureRedisConnected,
   saveSession,
@@ -23,7 +27,8 @@ import {
   deleteSessionKey,
   listSessions,
   ping as redisPing,
-} from "./redisStore";
+} from "./redisStore.js";
+import scalarTheme from "./scalar-theme.js";
 import {
   browserServiceHost,
   makeSessionServiceName,
@@ -34,8 +39,8 @@ import {
   listActiveServices,
   waitForServiceReadiness,
   core as k8sCore,
-} from "./k8s";
-import { startBackgroundWorkers } from "./janitor";
+} from "./k8s.js";
+import { startBackgroundWorkers } from "./janitor.js";
 import type {
   CreateSessionRequest,
   CreateSessionResponse,
@@ -44,7 +49,14 @@ import type {
   ListSessionsResponse,
   SessionData,
   SessionWithHealth,
-} from "./types";
+} from "./types.js";
+import { titleCase } from "../utils/text.js";
+import {
+  getMetrics,
+  sessionsTotal,
+  sessionStartTime,
+  updateLiveSessions,
+} from "./metrics.js";
 
 /**
  * Create and configure a Fastify server with all routes registered.
@@ -57,23 +69,27 @@ export function createServer(): FastifyInstance {
     trustProxy: true,
   });
 
-  // Normalize and strip BASE_PATH from incoming requests to preserve existing behavior
-  if (BASE_PATH) {
-    fastify.addHook("onRequest", async (request) => {
-      const url = request.raw.url || "/";
-      if (url === BASE_PATH || url.startsWith(BASE_PATH + "/")) {
-        request.raw.url = url.slice(BASE_PATH.length) || "/";
-      }
-    });
-  }
-
-  // Routes
-  registerRoutes(fastify);
-
   return fastify;
 }
 
 function registerRoutes(fastify: FastifyInstance): void {
+  // Preflight handler for CORS (applies to all prefixed routes)
+  fastify.options("/*", async (_request, reply) => {
+    reply.header("Access-Control-Allow-Origin", "*");
+    reply.header(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD",
+    );
+    reply.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Requested-With, Accept",
+    );
+    // Some clients expect this header when sending credentials; keep it false by default.
+    reply.header("Access-Control-Allow-Credentials", "false");
+    // No content for preflight
+    reply.code(204).send();
+  });
+
   // Create session
   fastify.post<{ Body: CreateSessionRequest }>("/sessions", async (request) => {
     const { timeout = SESSION_TIMEOUT_DEFAULT, options = {} } =
@@ -96,6 +112,9 @@ function registerRoutes(fastify: FastifyInstance): void {
     };
 
     await saveSession(session);
+
+    // Increment total sessions counter
+    sessionsTotal.inc();
 
     // Respect MAX_SESSIONS based on existing active services
     const activeServices = await listActiveServices();
@@ -158,11 +177,22 @@ function registerRoutes(fastify: FastifyInstance): void {
     // Wait for readiness
     try {
       await waitForServiceReadiness(serviceName, READINESS_TIMEOUT_SECONDS);
-      session.status = "running";
+      session.status = "live";
       await saveSession(session);
+
+      // Track session start time
+      const startTime =
+        (new Date().getTime() - new Date(session.createdAt).getTime()) / 1000;
+      sessionStartTime.observe(startTime);
+
+      // Update live sessions gauge
+      const allSessions = await listSessions();
+      const liveCount = allSessions.filter((s) => s.status === "live").length;
+      updateLiveSessions(liveCount);
+
       const resp: CreateSessionResponse = {
         sessionId,
-        status: "running",
+        status: "live",
         serviceHost,
         serviceName,
         podName: podName!,
@@ -186,13 +216,13 @@ function registerRoutes(fastify: FastifyInstance): void {
     }
   });
 
-  // Session landing: redirect to proxied root if running; otherwise show a small HTML status
+  // Session landing: redirect to proxied root if live; otherwise show a small HTML status
   fastify.get<{ Params: { sessionId: string } }>(
     "/sessions/:sessionId",
     async (request, reply) => {
       try {
         const s = await getSession(request.params.sessionId);
-        if (s.status !== "running") {
+        if (s.status !== "live") {
           reply.type("text/html");
           return `<html><body><h1>Session ${s.sessionId}</h1><p>Status: ${s.status}</p></body></html>`;
         }
@@ -213,7 +243,7 @@ function registerRoutes(fastify: FastifyInstance): void {
     async (request): Promise<SessionWithHealth | { error: string }> => {
       try {
         const session = await getSession(request.params.sessionId);
-        return { ...session, healthy: session.status === "running" };
+        return { ...session, healthy: session.status === "live" };
       } catch (err: any) {
         return { error: String(err?.message || err) };
       }
@@ -234,6 +264,12 @@ function registerRoutes(fastify: FastifyInstance): void {
           await deletePod(s.podName).catch(() => {});
         }
         await deleteSessionKey(sid);
+
+        // Update live sessions gauge
+        const allSessions = await listSessions();
+        const liveCount = allSessions.filter((s) => s.status === "live").length;
+        updateLiveSessions(liveCount);
+
         return { success: true };
       } catch (err: any) {
         return { success: false, error: String(err?.message || err) };
@@ -274,13 +310,21 @@ function registerRoutes(fastify: FastifyInstance): void {
     }
   });
 
-  // Root page
-  fastify.get("/", async (_request, reply) => {
-    reply.type("text/html");
-    const base = BASE_PATH || "";
-    return `<html><body><h1>Steel Browser Orchestrator</h1><p>Namespace: ${K8S_NAMESPACE} • Base path: ${
-      base || "/"
-    }</p><ul><li><a href="${base}/sessions">Sessions</a></li><li><a href="${base}/health">Health</a></li></ul></body></html>`;
+  // Metrics
+  fastify.get("/metrics", async (_request, reply) => {
+    try {
+      // Update live sessions gauge before returning metrics
+      const allSessions = await listSessions();
+      const liveCount = allSessions.filter((s) => s.status === "live").length;
+      updateLiveSessions(liveCount);
+
+      const metrics = await getMetrics();
+      reply.type("text/plain; version=0.0.4; charset=utf-8");
+      return metrics;
+    } catch (err: any) {
+      reply.code(500).type("text/plain");
+      return `Error generating metrics: ${String(err?.message || err)}`;
+    }
   });
 
   // Proxy path: all methods
@@ -309,7 +353,7 @@ async function proxyToSession(
   // Update usage / TTL
   await touchSession(sessionId, session.timeoutSeconds);
 
-  if (session.status !== "running") {
+  if (session.status !== "live") {
     return reply
       .code(409)
       .send({ error: `Session not ready: ${session.status}` });
@@ -344,6 +388,41 @@ export async function startServer(): Promise<FastifyInstance> {
     "Startup configuration",
   );
 
+  // Register CORS plugin early so it applies to all routes and preflight requests.
+  // Allow all origins by default — adjust as needed for production security.
+  await fastify.register(fastifyCors, {
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+    ],
+    credentials: false,
+  });
+
+  // Add an onSend hook to ensure CORS headers are present even for proxied responses.
+  fastify.addHook("onSend", async (request, reply, payload) => {
+    // Only set headers if they aren't already set by upstream / other handlers.
+    if (!reply.getHeader("Access-Control-Allow-Origin")) {
+      reply.header("Access-Control-Allow-Origin", "*");
+    }
+    if (!reply.getHeader("Access-Control-Allow-Methods")) {
+      reply.header(
+        "Access-Control-Allow-Methods",
+        "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD",
+      );
+    }
+    if (!reply.getHeader("Access-Control-Allow-Headers")) {
+      reply.header(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, X-Requested-With, Accept",
+      );
+    }
+    return payload;
+  });
+
   // Ensure Redis client is connected (with internal retries)
   await ensureRedisConnected();
 
@@ -357,6 +436,54 @@ export async function startServer(): Promise<FastifyInstance> {
   await fastify.register(replyFrom, {
     undici: { connections: 100, pipelining: 1 },
   });
+
+  await fastify.register(fastifySwagger, {
+    openapi: {
+      info: {
+        title: "Steel Browser Instance API",
+        description:
+          "Documentation for controlling a single instance of Steel Browser",
+        version: "0.0.1",
+      },
+      servers: [
+        {
+          // url: getBaseUrl(),
+          url: "http://localhost/api",
+          description: "Local server",
+        },
+      ],
+      paths: {}, // paths must be included even if it's an empty object
+      components: {
+        securitySchemes: {},
+      },
+    },
+    refResolver: {
+      buildLocalReference: (json, baseUri, fragment, i) => {
+        return titleCase(json.$id as string) || `Fragment${i}`;
+      },
+    },
+  });
+
+  await fastify.register(fastifyScalar as any, {
+    // scalar still uses fastify v4
+    routePrefix: "/docs",
+    configuration: {
+      customCss: scalarTheme,
+    },
+  });
+
+  await fastify.register(
+    async (scoped) => {
+      registerRoutes(scoped);
+    },
+    { prefix: `${BASE_PATH || ""}/v1` },
+  );
+  // await fastify.ready();
+
+  // fs.writeFileSync(
+  //   "./openapi.json",
+  //   JSON.stringify(fastify.swagger(), null, 2),
+  // );
 
   // Listen
   await fastify.listen({ port: PORT, host: "0.0.0.0" });

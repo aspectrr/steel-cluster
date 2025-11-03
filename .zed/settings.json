@@ -1,0 +1,13 @@
+{
+  "file_types": {
+    "Helm": [
+      "**/**/templates/**/*.tpl",
+      "**/**/templates/**/*.yaml",
+      "**/**/ttemplates/**/*.yml",
+      "**/**/thelmfile.d/**/*.yaml",
+      "**/**/thelmfile.d/**/*.yml",
+      "**/**/tvalues*.yaml",
+      "**/**/tChart*.yaml"
+    ]
+  }
+}

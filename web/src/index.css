@@ -1,68 +1,453 @@
-:root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@font-face {
+    font-family: "Geist";
+    src: url("./fonts/Geist/Geist-Regular.woff2") format("woff2");
+    font-weight: normal;
+    font-style: normal;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+@font-face {
+    font-family: "Geist";
+    src: url("./fonts/Geist/Geist-Medium.woff2") format("woff2");
+    font-weight: 500;
 }
 
-body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
+@font-face {
+    font-family: "Geist";
+    src: url("./fonts/Geist/Geist-SemiBold.woff2") format("woff2");
+    font-weight: 600;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+@font-face {
+    font-family: "Geist";
+    src: url("./fonts/Geist/Geist-Bold.woff2") format("woff2");
+    font-weight: bold;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+@font-face {
+    font-family: "Geist";
+    src: url("./fonts/Geist/Geist-Black.woff2") format("woff2");
+    font-weight: 900;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+@font-face {
+    font-family: "Geist";
+    src: url("./fonts/Geist/Geist-ExtraLight.woff2") format("woff2");
+    font-weight: 200;
+}
+
+@font-face {
+    font-family: "Geist";
+    src: url("./fonts/Geist/Geist-ExtraBold.woff2") format("woff2");
+    font-weight: 950;
+}
+
+@font-face {
+    font-family: "Geist";
+    src: url("./fonts/Geist/Geist-Thin.woff2") format("woff2");
+    font-weight: 100;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono/GeistMono-Regular.woff2") format("woff2");
+    font-weight: normal;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono/GeistMono-Medium.woff2") format("woff2");
+    font-weight: 500;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono/GeistMono-SemiBold.woff2") format("woff2");
+    font-weight: 600;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono/GeistMono-Bold.woff2") format("woff2");
+    font-weight: bold;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono/GeistMono-Black.woff2") format("woff2");
+    font-weight: 900;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono/GeistMono-ExtraLight.woff2") format("woff2");
+    font-weight: 200;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono/GeistMono-ExtraBold.woff2") format("woff2");
+    font-weight: 950;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./fonts/GeistMono/GeistMono-Thin.woff2") format("woff2");
+    font-weight: 100;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-Thin.woff2") format("woff2");
+    font-weight: 100;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-ThinItalic.woff2")
+        format("woff2");
+    font-weight: 100;
+    font-style: italic;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-ExtraLight.woff2")
+        format("woff2");
+    font-weight: 200;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-ExtraLightItalic.woff2")
+        format("woff2");
+    font-weight: 200;
+    font-style: italic;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-Light.woff2") format("woff2");
+    font-weight: 300;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-LightItalic.woff2")
+        format("woff2");
+    font-weight: 300;
+    font-style: italic;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-Regular.woff2")
+        format("woff2");
+    font-weight: 400;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-Italic.woff2") format("woff2");
+    font-weight: 400;
+    font-style: italic;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-Medium.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-MediumItalic.woff2")
+        format("woff2");
+    font-weight: 500;
+    font-style: italic;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-SemiBold.woff2")
+        format("woff2");
+    font-weight: 600;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-SemiBoldItalic.woff2")
+        format("woff2");
+    font-weight: 600;
+    font-style: italic;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-Bold.woff2") format("woff2");
+    font-weight: 700;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-BoldItalic.woff2")
+        format("woff2");
+    font-weight: 700;
+    font-style: italic;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-ExtraBold.woff2")
+        format("woff2");
+    font-weight: 800;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    src: url("./fonts/JetBrainsMono/JetBrainsMono-ExtraBoldItalic.woff2")
+        format("woff2");
+    font-weight: 800;
+    font-style: italic;
+}
+
+#root {
+    height: 100vh;
+    width: 100vw;
+}
+
+::-webkit-scrollbar {
+    width: 8px; /* width of the entire scrollbar */
+    height: 8px; /* width of the entire scrollbar */
+}
+
+::-webkit-scrollbar-track {
+    background: transparent; /*var(--sand-3);  color of the tracking area */
+    border-top-right-radius: inherit;
+    border-bottom-right-radius: inherit;
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: var(--sand-3);
+    border-radius: var(--radius);
+    border: 1px solid var(--sand-2);
+    :hover {
+        background-color: rgb(174, 144, 83);
+    }
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--gold-8); /*rgb(255, 170, 0)*/
+}
+
+/* Overlay scrollbar styles */
+.overlay-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 163, 175, 0.3) transparent;
+}
+
+.overlay-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+.overlay-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.overlay-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(156, 163, 175, 0.3);
+    border-radius: 3px;
+    border: none;
+    transition: background-color 0.2s ease;
+}
+
+.overlay-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(156, 163, 175, 0.6);
+}
+
+.overlay-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+@layer base {
+    html {
+        font-family: "Geist", sans-serif;
+        -webkit-font-smoothing: antialiased; /* macOS Safari/Chrome */
+        -moz-osx-font-smoothing: grayscale; /* macOS Firefox */
+        text-rendering: optimizeLegibility; /* fallback */
+    }
+    :root {
+        --base-1: 0 0% 98.82352941176471%;
+        --base-2: 0 0% 97.6470588235294%;
+        --base-3: 0 0% 94.11764705882352%;
+        --base-4: 0 0% 90.98039215686275%;
+        --base-5: 0 0% 87.84313725490196%;
+        --base-6: 0 0% 85.09803921568627%;
+        --base-7: 0 0% 80.7843137254902%;
+        --base-8: 0 0% 73.33333333333333%;
+        --base-9: 0 0% 55.294117647058826%;
+        --base-10: 0 0% 51.37254901960784%;
+        --base-11: 0 0% 39.21568627450981%;
+        --base-12: 0 0% 12.549019607843137%;
+        --accent-1: 240 33.33333333333333% 99.41176470588235%;
+        --accent-2: 225.00000000000006 100% 98.43137254901961%;
+        --accent-3: 222.35294117647067 89.47368421052634% 96.27450980392157%;
+        --accent-4: 224 100% 94.11764705882352%;
+        --accent-5: 223.99999999999997 100% 91.17647058823529%;
+        --accent-6: 225.48387096774192 100% 87.84313725490196%;
+        --accent-7: 226.15384615384616 86.66666666666669% 82.35294117647058%;
+        --accent-8: 225.9183673469388 75.38461538461539% 74.50980392156863%;
+        --accent-9: 226.0377358490566 70.04405286343612% 55.490196078431374%;
+        --accent-10: 226.2111801242236 65.18218623481782% 51.5686274509804%;
+        --accent-11: 225.9574468085106 55.73122529644269% 50.3921568627451%;
+        --accent-12: 226.2295081967213 49.59349593495935% 24.11764705882353%;
+        --background: 0 0% 98.82352941176471%;
+        --foreground: 0 0% 12.549019607843137%;
+        --card: 0 0% 97.6470588235294%;
+        --card-foreground: 0 0% 12.549019607843137%;
+        --popover: 0 0% 98.82352941176471%;
+        --popover-foreground: 0 0% 12.549019607843137%;
+        --primary: 0 0% 0%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 0 0% 97.6470588235294%;
+        --secondary-foreground: 0 0% 39.21568627450981%;
+        --muted: 0 0% 97.6470588235294%;
+        --muted-foreground: 0 0% 39.21568627450981%;
+        --accent: 226.2111801242236 65.18218623481782% 51.5686274509804%;
+        --accent-foreground: 0 0% 100%;
+        --destructive: 10.10869565217391 73.01587301587303% 50.588235294117645%;
+        --destructive-foreground: 7.868852459016397 49.59349593495935%
+            24.11764705882353%;
+        --border: 0 0% 85.09803921568627%;
+        --input: 0 0% 85.09803921568627%;
+        --ring: 0 0% 85.09803921568627%;
+        --radius: 0.5rem;
+    }
+    .dark {
+        --base-1: 0 0% 6.666666666666667%;
+        --base-2: 0 0% 9.803921568627452%;
+        --base-3: 0 0% 13.333333333333334%;
+        --base-4: 0 0% 16.470588235294116%;
+        --base-5: 0 0% 19.215686274509807%;
+        --base-6: 0 0% 22.745098039215687%;
+        --base-7: 0 0% 28.235294117647058%;
+        --base-8: 0 0% 37.64705882352941%;
+        --base-9: 0 0% 43.13725490196079%;
+        --base-10: 0 0% 48.23529411764706%;
+        --base-11: 0 0% 70.58823529411765%;
+        --base-12: 0 0% 93.33333333333333%;
+        --accent-1: 231.42857142857144 29.166666666666668% 9.411764705882353%;
+        --accent-2: 230 31.03448275862069% 11.372549019607844%;
+        --accent-3: 225.3061224489796 50.51546391752577% 19.019607843137255%;
+        --accent-4: 225.21739130434784 54.330708661417326% 24.901960784313726%;
+        --accent-5: 224.81012658227849 51.633986928104584% 30%;
+        --accent-6: 226.42857142857142 46.66666666666667% 35.294117647058826%;
+        --accent-7: 226.45161290322582 44.4976076555024% 40.98039215686274%;
+        --accent-8: 225.8181818181818 45.08196721311475% 47.843137254901954%;
+        --accent-9: 226.0377358490566 70.04405286343612% 55.490196078431374%;
+        --accent-10: 227.5 72.72727272727272% 61.1764705882353%;
+        --accent-11: 228.2474226804124 100% 80.98039215686275%;
+        --accent-12: 223.90243902439025 100% 91.9607843137255%;
+        --background: 0 0% 6.666666666666667%;
+        --foreground: 0 0% 93.33333333333333%;
+        --card: 0 0% 9.803921568627452%;
+        --card-foreground: 0 0% 93.33333333333333%;
+        --popover: 0 0% 6.666666666666667%;
+        --popover-foreground: 0 0% 93.33333333333333%;
+        --primary: 0 0% 100%;
+        --primary-foreground: 0 0% 0%;
+        --secondary: 0 0% 9.803921568627452%;
+        --secondary-foreground: 0 0% 70.58823529411765%;
+        --muted: 0 0% 9.803921568627452%;
+        --muted-foreground: 0 0% 70.58823529411765%;
+        --accent: 227.5 72.72727272727272% 61.1764705882353%;
+        --accent-foreground: 0 0% 100%;
+        --destructive: 10.94117647058823 81.73076923076924% 59.21568627450981%;
+        --destructive-foreground: 10 85.71428571428571% 89.01960784313725%;
+        --border: 0 0% 22.745098039215687%;
+        --input: 0 0% 22.745098039215687%;
+        --ring: 0 0% 22.745098039215687%;
+        --radius: 0.5rem;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
+}
+
+/* Code block line numbers */
+pre code {
+    counter-reset: line;
+    display: block;
+    padding: 1rem 0;
+}
+
+pre code .line {
+    display: inline-block;
+    width: 100%;
+    padding: 0 1.5rem 0 3.5rem;
+    position: relative;
+    line-height: 1.5rem;
+}
+
+pre code .line:not(:empty)::before {
+    counter-increment: line;
+    content: counter(line);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 3rem;
+    text-align: right;
+    color: var(--sand-10);
+    font-size: 0.875rem;
+    padding-right: 0.5rem;
+    user-select: none;
+}
+
+/* Scale-in animation for option group dot */
+@keyframes scale-in {
+    0% {
+        transform: scale(0);
+        opacity: 0;
+    }
+    50% {
+        transform: scale(1.1);
+        opacity: 0.8;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.animate-scale-in {
+    animation: scale-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@layer utilities {
+    .no-scrollbar::-webkit-scrollbar {
+        display: none;
+    }
+    .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
 }

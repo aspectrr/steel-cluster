@@ -1,0 +1,89 @@
+.rr-controller {
+  width: 100%;
+  height: 80px;
+  background: var(--sand-1);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  align-items: center;
+  border-radius: 0 0 5px 5px;
+  border-top: solid 1px var(--sand-6);
+}
+
+.rr-timeline {
+  width: 80%;
+  display: flex;
+  align-items: center;
+}
+
+.rr-timeline__time {
+  display: inline-block;
+  width: 100px;
+  text-align: center;
+  color: #fff;
+}
+
+.rr-progress {
+  flex: 1;
+  height: 12px;
+  background: #27272a;
+  position: relative;
+  border-radius: 8px;
+  cursor: pointer;
+  box-sizing: border-box;
+  border-top: solid 1px transparent;
+  border-bottom: solid 1px transparent;
+  overflow: hidden;
+}
+
+.rr-progress.disabled {
+  cursor: not-allowed;
+}
+
+.rr-progress__step {
+  height: 100%;
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: #fff;
+}
+
+.rr-controller__btns {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.rr-controller__btns button {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  color: #fff;
+}
+
+.rr-controller__btns button:active,
+.rr-controller__btns button.active {
+  background: #27272a;
+  color: var(--sand-12);
+}
+
+.rr-controller__btns button:active > svg > path,
+.rr-controller__btns button.active > svg > path {
+  fill: #27272a;
+}
+
+.rr-controller__btns button > svg > path {
+  fill: #fff;
+}
+
+.rr-controller__btns button:disabled {
+  cursor: not-allowed;
+}

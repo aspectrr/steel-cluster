@@ -14,12 +14,8 @@ import {
   type SessionData,
   SESSION_KEY_PREFIX,
   SESSION_INDEX_KEY,
-} from "./types";
-import {
-  REDIS_HOST,
-  REDIS_PORT,
-  REDIS_PASSWORD,
-} from "./config";
+} from "./types.js";
+import { REDIS_HOST, REDIS_PORT, REDIS_PASSWORD } from "./config.js";
 
 /**
  * Export a single Redis client instance for the process.
@@ -64,10 +60,7 @@ export async function saveSession(session: SessionData): Promise<void> {
   await redis.setEx(key, session.timeoutSeconds, JSON.stringify(session));
   // Maintain an index of active session IDs for optional listing
   await redis.sAdd(SESSION_INDEX_KEY, session.sessionId);
-  await redis.expire(
-    SESSION_INDEX_KEY,
-    Math.max(session.timeoutSeconds, 3600),
-  );
+  await redis.expire(SESSION_INDEX_KEY, Math.max(session.timeoutSeconds, 3600));
 }
 
 /**

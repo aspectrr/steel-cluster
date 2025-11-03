@@ -6,9 +6,9 @@ import {
   deleteService,
   deletePod,
   makeSessionPodName,
-} from "./k8s";
-import { redis, sessionKey } from "./redisStore";
-import { JANITOR_INTERVAL_MS } from "./config";
+} from "./k8s.js";
+import { redis, sessionKey } from "./redisStore.js";
+import { JANITOR_INTERVAL_MS } from "./config.js";
 
 export interface MinimalLogger {
   info: (...args: any[]) => void;
@@ -100,9 +100,7 @@ export async function cleanupOrphans(
  *
  * Returns the interval handle so callers can stop it if needed.
  */
-export function startBackgroundWorkers(
-  logger: MinimalLogger = defaultLogger,
-): NodeJS.Timeout {
+export function startBackgroundWorkers(logger: MinimalLogger = defaultLogger) {
   const timer = setInterval(() => {
     cleanupOrphans(logger).catch((err) =>
       logger.warn({ err }, "Janitor loop error"),
@@ -125,6 +123,6 @@ export function startBackgroundWorkers(
 /**
  * Stop previously started background workers.
  */
-export function stopBackgroundWorkers(timer: NodeJS.Timeout): void {
+export function stopBackgroundWorkers(timer: any): void {
   clearInterval(timer);
 }

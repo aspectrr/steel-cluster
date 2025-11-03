@@ -7,7 +7,7 @@
 /**
  * Session lifecycle states.
  */
-export type SessionStatus = "pending" | "running" | "failed";
+export type SessionStatus = "pending" | "live" | "failed";
 
 /**
  * ISO 8601 / RFC 3339 timestamp string (UTC recommended).

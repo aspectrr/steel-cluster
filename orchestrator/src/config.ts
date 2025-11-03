@@ -9,12 +9,14 @@ function parseNumber(value: string | undefined, fallback: number): number {
 }
 
 function normalizeBasePath(raw: string | undefined): string {
-  const v = raw ?? "";
-  if (v === "/") {
+  const v = (raw ?? "").trim();
+  // Empty or "/" means no base path
+  if (v === "" || v === "/") {
     return "";
   }
-  // remove trailing slashes, keep leading one if present
-  return v.replace(/\/+$/, "");
+  // Ensure a single leading slash and remove any trailing slashes
+  const withLeading = v.startsWith("/") ? v : `/${v}`;
+  return withLeading.replace(/\/+$/, "");
 }
 
 export function loadConfig(): OrchestratorConfig {

@@ -49,10 +49,10 @@ orchestrator:
     annotations: {}
 
   # Pod annotations (you can enable Prometheus pod scraping if needed)
-  podAnnotations: {}
-    # prometheus.io/scrape: "true"
-    # prometheus.io/port: "3000"
-    # prometheus.io/path: "/metrics"
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3000"
+    prometheus.io/path: "/metrics"
 
   # Container environment variables for the orchestrator
   env:
@@ -61,18 +61,18 @@ orchestrator:
     REDIS_PORT: "6379"
     # Will default to the Helm namespace if left as empty; overridden in templates using .Release.Namespace
     K8S_NAMESPACE: ""
-    BROWSER_IMAGE: ghcr.io/steel-dev/steel-browser:latest
+    BROWSER_IMAGE: ghcr.io/steel-dev/steel-browser-api:latest
     PREWARM_POOL_SIZE: "2"
     MAX_SESSIONS: "100"
     SESSION_TIMEOUT: "1800"
     JOB_TTL_SECONDS: "3600"
     # Base path/host used by orchestrator if needed by your app logic
-    BASE_PATH: localhost
+    BASE_PATH: /api
 
   # HTTP health endpoints
   livenessProbe:
     enabled: true
-    path: /health
+    path: /api/v1/health
     port: 3000
     initialDelaySeconds: 30
     periodSeconds: 10
@@ -82,7 +82,7 @@ orchestrator:
 
   readinessProbe:
     enabled: true
-    path: /health
+    path: /api/v1/health
     port: 3000
     initialDelaySeconds: 5
     periodSeconds: 5
@@ -170,12 +170,24 @@ ingress:
           service:
             name: prometheus
             port: 9090
-        # Root path to orchestrator
-        - path: /
+        # Subpath for Web UI
+        - path: /web
+          pathType: Prefix
+          service:
+            name: steel-web
+            port: 3001
+        # API path to orchestrator
+        - path: /api
           pathType: Prefix
           service:
             name: browser-orchestrator
             port: 3000
+        # Root path to web (default)
+        # - path: /
+        #   pathType: Prefix
+        #   service:
+        #     name: steel-web
+        #     port: 3001
   tls: []
   # - secretName: steel-cluster-tls
   #   hosts:
@@ -334,6 +346,68 @@ grafana:
     limits:
       memory: "512Mi"
       cpu: "200m"
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+web:
+  enabled: false
+  name: steel-web
+
+  image:
+    repository: steel-web
+    tag: latest
+    # If using a locally built image (e.g., kind/k3d), you may set Never
+    pullPolicy: IfNotPresent
+
+  replicas: 1
+
+  service:
+    type: ClusterIP
+    port: 3001
+    targetPort: 3001
+    # Name of the service port
+    portName: http
+    annotations: {}
+
+  # Pod annotations
+  podAnnotations: {}
+
+  # Container environment variables for the web app
+  env:
+    NODE_ENV: production
+    # Add any other environment variables your web app needs
+    VITE_API_URL: "http://browser-orchestrator:3000"
+
+  # HTTP health endpoints
+  livenessProbe:
+    enabled: true
+    path: /
+    port: 3001
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+
+  readinessProbe:
+    enabled: true
+    path: /
+    port: 3001
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
 
   nodeSelector: {}
   tolerations: []

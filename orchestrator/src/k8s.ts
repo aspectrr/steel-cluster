@@ -19,7 +19,7 @@ import {
   IMAGE_PULL_SECRET,
   READINESS_INITIAL_DELAY,
   READINESS_PERIOD_SECONDS,
-} from "./config";
+} from "./config.js";
 
 /**
  * Kubernetes client (CoreV1Api), initialized from the default environment:
