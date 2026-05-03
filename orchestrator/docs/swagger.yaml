@@ -1,0 +1,208 @@
+basePath: /v1
+definitions:
+  main.CreateSessionResponse:
+    properties:
+      error:
+        type: string
+      podName:
+        type: string
+      serviceHost:
+        type: string
+      serviceName:
+        type: string
+      sessionId:
+        type: string
+      status:
+        type: string
+    type: object
+  main.HealthResponse:
+    properties:
+      basePath:
+        type: string
+      namespace:
+        type: string
+      sessions:
+        type: integer
+      status:
+        type: string
+      timestamp:
+        type: string
+      warmPoolReady:
+        type: integer
+    type: object
+  main.SessionData:
+    properties:
+      createdAt:
+        type: string
+      id:
+        type: string
+      lastUsed:
+        type: string
+      notes:
+        type: string
+      options:
+        additionalProperties: {}
+        type: object
+      podName:
+        type: string
+      serviceHost:
+        type: string
+      serviceName:
+        type: string
+      status:
+        type: string
+      timeoutSeconds:
+        type: integer
+    type: object
+host: localhost:3000
+info:
+  contact: {}
+  description: Kubernetes-based browser session orchestrator. Creates isolated browser
+    pods per session, routes HTTP and WebSocket (CDP) traffic, and maintains a warm
+    pool for fast session startup.
+  license:
+    name: MIT
+  title: Steel Cluster Orchestrator API
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      description: Returns orchestrator health, active session count, and warm pool
+        status.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.HealthResponse'
+      summary: Health check
+      tags:
+      - system
+  /sessions:
+    delete:
+      description: Deletes all sessions, their pods, and services.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Release all sessions
+      tags:
+      - sessions
+    get:
+      description: Returns all active and recent sessions.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List all sessions
+      tags:
+      - sessions
+    post:
+      consumes:
+      - application/json
+      description: Creates a new browser session with an isolated pod. Claims a warm
+        pod if available (~85ms), otherwise creates a fresh pod (~30s cold start).
+      parameters:
+      - description: Session options
+        in: body
+        name: body
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.CreateSessionResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create a browser session
+      tags:
+      - sessions
+  /sessions/{sessionId}:
+    delete:
+      description: Deletes the session, its pod, and service.
+      parameters:
+      - description: Session ID
+        in: path
+        name: sessionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+      summary: Delete a session
+      tags:
+      - sessions
+    get:
+      description: Returns full session data including pod name, service host, and
+        status.
+      parameters:
+      - description: Session ID
+        in: path
+        name: sessionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.SessionData'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get session details
+      tags:
+      - sessions
+  /sessions/{sessionId}/status:
+    get:
+      description: Returns the current status and health of a session.
+      parameters:
+      - description: Session ID
+        in: path
+        name: sessionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get session status
+      tags:
+      - sessions
+swagger: "2.0"

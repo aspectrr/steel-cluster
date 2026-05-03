@@ -1,3 +1,9 @@
+// @title Steel Cluster Orchestrator API
+// @version 1.0.0
+// @description Kubernetes-based browser session orchestrator. Creates isolated browser pods per session, routes HTTP and WebSocket (CDP) traffic, and maintains a warm pool for fast session startup.
+// @host localhost:3000
+// @BasePath /v1
+// @license.name MIT
 package main
 
 import (
@@ -14,6 +20,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/swaggo/swag"
+
+	_ "github.com/steel-cluster/orchestrator/docs"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -166,6 +176,16 @@ func (o *Orchestrator) sessionHandler(c *gin.Context) {
 
 // POST /v1/sessions — Create a new browser session.
 // Tries to claim a warm pod first; falls back to creating a fresh pod.
+//
+// @Summary      Create a browser session
+// @Description  Creates a new browser session with an isolated pod. Claims a warm pod if available (~85ms), otherwise creates a fresh pod (~30s cold start).
+// @Tags         sessions
+// @Accept       json
+// @Produce      json
+// @Param        body  body  object  false  "Session options"  example({"timeout": 600})
+// @Success      200   {object}  CreateSessionResponse
+// @Failure      500   {object}  map[string]string
+// @Router       /sessions [post]
 func (o *Orchestrator) createSession(c *gin.Context) {
 	var body struct {
 		Timeout int            `json:"timeout"`
@@ -275,6 +295,13 @@ func (o *Orchestrator) createSession(c *gin.Context) {
 }
 
 // GET /v1/sessions — List all sessions.
+//
+// @Summary      List all sessions
+// @Description  Returns all active and recent sessions.
+// @Tags         sessions
+// @Produce      json
+// @Success      200  {object}  map[string]any
+// @Router       /sessions [get]
 func (o *Orchestrator) listSessions(c *gin.Context) {
 	sessions, err := o.redis.ListSessions(c.Request.Context())
 	if err != nil {
@@ -288,6 +315,15 @@ func (o *Orchestrator) listSessions(c *gin.Context) {
 }
 
 // GET /v1/sessions/:sessionId — Get session details as JSON.
+//
+// @Summary      Get session details
+// @Description  Returns full session data including pod name, service host, and status.
+// @Tags         sessions
+// @Produce      json
+// @Param        sessionId  path  string  true  "Session ID"
+// @Success      200  {object}  SessionData
+// @Failure      404  {object}  map[string]string
+// @Router       /sessions/{sessionId} [get]
 func (o *Orchestrator) getSessionDetails(c *gin.Context) {
 	sessionID := c.Param("sessionId")
 	session, err := o.redis.GetSession(c.Request.Context(), sessionID)
@@ -299,6 +335,15 @@ func (o *Orchestrator) getSessionDetails(c *gin.Context) {
 }
 
 // GET /v1/sessions/:sessionId/status — Get session status.
+//
+// @Summary      Get session status
+// @Description  Returns the current status and health of a session.
+// @Tags         sessions
+// @Produce      json
+// @Param        sessionId  path  string  true  "Session ID"
+// @Success      200  {object}  map[string]any
+// @Failure      404  {object}  map[string]string
+// @Router       /sessions/{sessionId}/status [get]
 func (o *Orchestrator) getSessionStatus(c *gin.Context) {
 	sessionID := c.Param("sessionId")
 	session, err := o.redis.GetSession(c.Request.Context(), sessionID)
@@ -312,6 +357,14 @@ func (o *Orchestrator) getSessionStatus(c *gin.Context) {
 }
 
 // DELETE /v1/sessions/:sessionId — Delete a single session.
+//
+// @Summary      Delete a session
+// @Description  Deletes the session, its pod, and service.
+// @Tags         sessions
+// @Produce      json
+// @Param        sessionId  path  string  true  "Session ID"
+// @Success      200  {object}  map[string]bool
+// @Router       /sessions/{sessionId} [delete]
 func (o *Orchestrator) deleteSession(c *gin.Context) {
 	sessionID := c.Param("sessionId")
 	session, err := o.redis.GetSession(c.Request.Context(), sessionID)
@@ -331,6 +384,13 @@ func (o *Orchestrator) deleteSession(c *gin.Context) {
 }
 
 // DELETE /v1/sessions — Release ALL sessions.
+//
+// @Summary      Release all sessions
+// @Description  Deletes all sessions, their pods, and services.
+// @Tags         sessions
+// @Produce      json
+// @Success      200  {object}  map[string]any
+// @Router       /sessions [delete]
 func (o *Orchestrator) releaseAllSessions(c *gin.Context) {
 	sessions, err := o.redis.ListSessions(c.Request.Context())
 	if err != nil {
@@ -355,6 +415,13 @@ func (o *Orchestrator) releaseAllSessions(c *gin.Context) {
 }
 
 // GET /v1/health — Health check.
+//
+// @Summary      Health check
+// @Description  Returns orchestrator health, active session count, and warm pool status.
+// @Tags         system
+// @Produce      json
+// @Success      200  {object}  HealthResponse
+// @Router       /health [get]
 func (o *Orchestrator) health(c *gin.Context) {
 	sessions, _ := o.redis.ListSessions(c.Request.Context())
 	count := 0
@@ -642,6 +709,33 @@ func (o *Orchestrator) wsProxyMiddleware(c *gin.Context) {
 
 // ─── Main ──────────────────────────────────────────────────────
 
+// swaggerJSON is populated at build time by swag (via docs package init).
+var swaggerJSON string
+
+func init() {
+	// The docs package init() runs first and registers the spec with swag.
+	// We read it back to serve at /documentation/json.
+	swagDoc, _ := swag.ReadDoc()
+	swaggerJSON = swagDoc
+}
+
+// scalarHTML serves the Scalar API documentation UI.
+const scalarHTML = `<!DOCTYPE html>
+<html>
+<head>
+  <title>Steel Cluster API Docs</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { margin: 0; }
+  </style>
+</head>
+<body>
+  <script id="api-reference" data-url="/documentation/json"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body>
+</html>`
+
 func main() {
 	cfg := LoadConfig()
 	slog.Info("Startup configuration",
@@ -692,6 +786,16 @@ func main() {
 	r.Use(orch.wsProxyMiddleware)
 
 	orch.RegisterRoutes(r)
+
+	// Documentation — Scalar API docs
+	r.GET("/documentation", func(c *gin.Context) {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(200, scalarHTML)
+	})
+	r.GET("/documentation/json", func(c *gin.Context) {
+		c.Header("Content-Type", "application/json")
+		c.String(200, swaggerJSON)
+	})
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,

@@ -1,119 +1,259 @@
-# Browser Session Orchestrator API Examples
+# Steel Cluster
 
-## Authentication
-The API doesn't require authentication by default, but you can add it via ingress or API gateway.
+Kubernetes-based browser session orchestrator. Creates isolated browser pods per session, routes HTTP and WebSocket (CDP) traffic, and maintains a warm pool for fast session startup.
 
-## Create a Session
+Built with **Go** (Gin + gorilla/websocket), deployed on Kubernetes with Helm.
+
+## Architecture
+
+```
+                    ┌──────────────────────────────┐
+                    │      Orchestrator (Go)        │
+                    │   Gin HTTP + WS CDP Proxy     │
+                    │   Warm Pool Manager           │
+                    │   Redis Session Store          │
+                    └──────┬───────┬───────┬────────┘
+                           │       │       │
+              ┌────────────┘       │       └────────────┐
+              ▼                    ▼                    ▼
+   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+   │  Browser Pod 1  │ │  Browser Pod 2  │ │  Warm Pod (idle)│
+   │  (session UUID) │ │  (session UUID) │ │  (pre-warmed)   │
+   │  Steel Browser  │ │  Steel Browser  │ │  Steel Browser  │
+   └─────────────────┘ └─────────────────┘ └─────────────────┘
+```
+
+**How it works:**
+1. Client calls `POST /v1/sessions` → orchestrator claims a warm pod (~85ms) or creates a fresh one (~30s)
+2. Orchestrator creates a K8s Service pointing to the pod
+3. All HTTP requests to `/v1/sessions/{id}/*` are reverse-proxied to the browser pod
+4. WebSocket CDP connections (Puppeteer, Playwright) are bidirectionally relayed through the orchestrator
+5. Background janitor cleans up orphaned resources; warm pool maintainer keeps pre-warmed pods ready
+
+## Quick Start
+
+### Prerequisites
+- Docker Desktop with Kubernetes enabled (or any K8s cluster)
+- `kubectl`, `helm`, `go` 1.22+
+
+### 1. Clone & Build
+
 ```bash
-curl -X POST http://localhost:3000/sessions \
+git clone https://github.com/aspectrr/steel-cluster.git
+cd steel-cluster
+
+# Build the Go orchestrator
+docker build -t browser-orchestrator:latest ./orchestrator/
+
+# Build the e2e test image
+docker build -t steel-e2e-tests:latest ./tests/
+```
+
+### 2. Deploy to Kubernetes
+
+```bash
+# Using raw manifests
+kubectl apply -f kubernetes/namespace.yaml
+kubectl apply -f kubernetes/rbac/
+kubectl apply -f kubernetes/redis/
+kubectl apply -f kubernetes/orchestrator/
+
+# Or with Helm
+helm install steel-cluster ./helm/steel-cluster/ \
+  --namespace browser-sessions \
+  --create-namespace \
+  --set orchestrator.image.pullPolicy=Never
+```
+
+### 3. Verify
+
+```bash
+kubectl get pods -n browser-sessions
+curl http://localhost:30300/v1/health
+```
+
+## API Reference
+
+Interactive docs available at `/documentation` (Scalar UI) when the orchestrator is running.
+
+**Regenerate the OpenAPI spec after code changes:**
+```bash
+cd orchestrator/
+swag init -g main.go -o ./docs --parseDependency --parseInternal
+```
+
+### Sessions
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/sessions` | Create a new browser session |
+| `GET` | `/v1/sessions` | List all sessions |
+| `GET` | `/v1/sessions/:id` | Get session details |
+| `GET` | `/v1/sessions/:id/status` | Get session status |
+| `DELETE` | `/v1/sessions/:id` | Delete a session |
+| `DELETE` | `/v1/sessions` | Delete all sessions |
+
+### Proxy
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `*` | `/v1/sessions/:id/*path` | HTTP reverse proxy to browser pod |
+| `WS` | `/v1/sessions/:id/cdp/*` | WebSocket CDP proxy (Puppeteer/Playwright) |
+
+### System
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/health` | Health check with warm pool status |
+| `GET` | `/documentation` | Scalar API documentation UI |
+| `GET` | `/documentation/json` | OpenAPI/Swagger JSON spec |
+
+### Examples
+
+**Create a session:**
+```bash
+curl -X POST http://localhost:30300/v1/sessions \
   -H "Content-Type: application/json" \
-  -d '{
-    "timeout": 3600,
-    "options": {
-      "headless": true,
-      "viewport": {"width": 1920, "height": 1080}
-    }
-  }'
+  -d '{"timeout": 600}'
 ```
 
 Response:
 ```json
 {
-  "sessionId": "abc123-def456-ghi789",
-  "status": "created",
-  "message": "Session created successfully"
+  "sessionId": "3959f351-7760-43a9-84e5-6c382e14c173",
+  "status": "live",
+  "serviceHost": "browser-session-3959f351...browser-sessions.svc.cluster.local",
+  "serviceName": "browser-session-3959f351...",
+  "podName": "browser-warm-d904eekk"
 }
 ```
 
-## Check Session Status
+**Connect Puppeteer via CDP:**
+```typescript
+import puppeteer from "puppeteer-core";
+
+const browser = await puppeteer.connect({
+  browserWSEndpoint: `ws://localhost:30300/v1/sessions/${sessionId}/cdp/devtools/browser/${browserId}`,
+});
+
+const page = await browser.newPage();
+await page.goto("https://news.ycombinator.com");
+const title = await page.$eval(".titleline > a", (el) => el.textContent);
+```
+
+**Health check:**
 ```bash
-curl http://localhost:3000/sessions/abc123-def456-ghi789/status
+curl http://localhost:30300/v1/health
 ```
 
 Response:
 ```json
 {
-  "sessionId": "abc123-def456-ghi789",
-  "status": "running",
-  "podName": "browser-session-abc123-def456-ghi789-xyz",
-  "podIP": "10.244.1.15",
-  "createdAt": "2025-06-24T10:30:00Z",
-  "lastUsed": "2025-06-24T10:32:15Z",
-  "health": {
-    "healthy": true,
-    "status": 200
-  }
+  "status": "ok",
+  "sessions": 0,
+  "warmPoolReady": 2,
+  "namespace": "browser-sessions",
+  "basePath": "",
+  "timestamp": "2026-05-03T00:42:50Z"
 }
 ```
 
-## Proxy Browser API Calls
+## Warm Browser Pool
+
+The orchestrator maintains a configurable pool of pre-warmed browser pods for near-instant session creation:
+
+- **Default pool size**: 2 pods (configurable via `WARM_POOL_SIZE`)
+- **Session creation from warm pool**: ~85ms (vs ~30s cold start)
+- **Auto-replenishment**: Background goroutine maintains pool size, creating replacement pods when claimed
+- **Stale cleanup**: Prewarm pods running >30 minutes without being claimed are automatically deleted
+
+**How it works:**
+1. On startup, the orchestrator seeds the warm pool to target size
+2. A background goroutine checks every 10 seconds and creates replacement pods
+3. When a session is created, a ready warm pod is claimed, relabeled, and assigned to the session
+4. A replacement warm pod is spawned in the background
+
+## Running E2E Tests
+
+Tests run as Kubernetes Jobs inside the cluster (not via port-forward) for reliable WebSocket connectivity:
+
 ```bash
-# Navigate to a page
-curl -X POST http://localhost:3000/sessions/abc123-def456-ghi789/proxy/navigate \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com"}'
+# Build the test image
+docker build -t steel-e2e-tests:latest ./tests/
 
-# Take a screenshot
-curl -X GET http://localhost:3000/sessions/abc123-def456-ghi789/proxy/screenshot \
-  --output screenshot.png
+# Run the test job
+kubectl apply -f tests/job.yaml
 
-# Execute JavaScript
-curl -X POST http://localhost:3000/sessions/abc123-def456-ghi789/proxy/execute \
-  -H "Content-Type: application/json" \
-  -d '{"script": "return document.title;"}'
+# Watch results
+kubectl logs -f job/steel-e2e-tests -n browser-sessions
+
+# Clean up
+kubectl delete job steel-e2e-tests -n browser-sessions
 ```
 
-## List All Sessions
-```bash
-curl http://localhost:3000/sessions
+**Tests include:**
+- Single session: Creates session, connects Puppeteer via CDP, scrapes top 5 Hacker News stories
+- 3 concurrent sessions: Creates 3 sessions in parallel, each scrapes different pages, verifies isolation
+
+## Project Structure
+
+```
+steel-cluster/
+├── orchestrator/              # Go orchestrator (Gin + gorilla/websocket)
+│   ├── main.go                # Routes, handlers, warm pool, WS proxy, janitor
+│   ├── k8s.go                 # Kubernetes pod/service CRUD
+│   ├── redis.go               # Redis session store
+│   ├── helpers.go             # CORS middleware, response helpers
+│   ├── docs/                  # Generated OpenAPI spec (swag)
+│   │   ├── swagger.json
+│   │   ├── swagger.yaml
+│   │   └── docs.go
+│   └── Dockerfile
+├── tests/                     # E2E tests (Puppeteer)
+│   ├── e2e.test.ts            # Main test suite
+│   ├── job.yaml               # K8s Job manifest
+│   └── Dockerfile
+├── web/                       # Web UI (React + Vite)
+├── helm/                      # Helm chart
+│   └── steel-cluster/
+│       ├── Chart.yaml
+│       ├── values.yaml
+│       └── templates/
+├── kubernetes/                # Raw K8s manifests
+│   ├── namespace.yaml
+│   ├── rbac/
+│   ├── redis/
+│   └── orchestrator/
+└── scripts/
+    ├── deploy.sh
+    └── cleanup.sh
 ```
 
-## Delete a Session
-```bash
-curl -X DELETE http://localhost:3000/sessions/abc123-def456-ghi789
-```
+## Configuration
 
-## Health Check
-```bash
-curl http://localhost:3000/health
-```
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `PORT` | `3000` | Orchestrator listen port |
+| `K8S_NAMESPACE` | `browser-sessions` | Kubernetes namespace |
+| `BROWSER_IMAGE` | `ghcr.io/steel-dev/steel-browser-api:latest` | Browser pod container image |
+| `BROWSER_PORT` | `3000` | Browser pod HTTP port |
+| `REDIS_HOST` | `localhost` | Redis host |
+| `REDIS_PORT` | `6379` | Redis port |
+| `WARM_POOL_SIZE` | `2` | Number of pre-warmed browser pods |
+| `MAX_SESSIONS` | `100` | Maximum concurrent sessions |
+| `SESSION_TIMEOUT` | `1800` | Default session timeout (seconds) |
+| `BASE_PATH` | `""` | API base path prefix |
 
-## Metrics (Prometheus format)
-```bash
-curl http://localhost:3000/metrics
-```
+## Why Go?
 
----
-```bash
-# scripts/monitor-deploy.sh
-#!/bin/bash
+The original orchestrator was written in Fastify/TypeScript. It worked for HTTP proxying but **Fastify's `server.on("upgrade")` silently failed for WebSocket upgrades** — CDP proxy connections never fired. After proving WebSockets work fine in Kubernetes with a minimal test server/client, the issue was 100% a Fastify framework problem.
 
-set -e
+Go's gorilla/websocket handles upgrades directly in Gin middleware with zero issues. The rewrite also brought:
+- Single binary deployment (no node_modules)
+- ~50MB Docker image (vs ~300MB Node)
+- Goroutine-based concurrency for WS relay and warm pool management
+- Clean K8s client-go integration
 
-echo "Deploying monitoring stack..."
+## License
 
-# Apply Prometheus configuration
-kubectl apply -f monitoring/prometheus/
-
-# Apply Grafana configuration
-kubectl apply -f monitoring/grafana/
-
-# Apply alert rules
-kubectl apply -f monitoring/prometheus/alerts.yaml
-
-# Wait for deployments
-
-echo "Waiting for monitoring stack to be ready..."
-kubectl wait --for=condition=available --timeout=300s deployment/prometheus -n browser-sessions
-kubectl wait --for=condition=available --timeout=300s deployment/grafana -n browser-sessions
-
-echo "Monitoring stack deployed!"
-echo ""
-echo "Access Grafana dashboard:"
-echo "kubectl port-forward service/grafana 3000:3000 -n browser-sessions"
-echo "Then visit: http://localhost:3000 (admin/admin123)"
-echo ""
-echo "Access Prometheus:"
-echo "kubectl port-forward service/prometheus 9090:9090 -n browser-sessions"
-echo "Then visit: http://localhost:9090"
-```
+MIT
