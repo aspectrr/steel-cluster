@@ -102,6 +102,38 @@ func (r *RedisStore) ListSessions(ctx context.Context) ([]SessionData, error) {
 	return sessions, nil
 }
 
+// CleanupStaleIndex removes IDs from sessions:index whose corresponding
+// session:{id} keys no longer exist (expired via TTL). Returns the number
+// of stale entries removed.
+func (r *RedisStore) CleanupStaleIndex(ctx context.Context) (int, error) {
+	ids, err := r.client.SMembers(ctx, "sessions:index").Result()
+	if err != nil {
+		return 0, fmt.Errorf("smembers sessions:index: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	// Pipeline EXISTS checks for all IDs.
+	pipe := r.client.Pipeline()
+	cmds := make([]*redis.IntCmd, len(ids))
+	for i, id := range ids {
+		cmds[i] = pipe.Exists(ctx, fmt.Sprintf("session:%s", id))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, fmt.Errorf("pipeline exists: %w", err)
+	}
+
+	var removed int
+	for i, cmd := range cmds {
+		if cmd.Val() == 0 {
+			r.client.SRem(ctx, "sessions:index", ids[i])
+			removed++
+		}
+	}
+	return removed, nil
+}
+
 func (r *RedisStore) SessionExists(ctx context.Context, sessionID string) (bool, error) {
 	key := fmt.Sprintf("session:%s", sessionID)
 	n, err := r.client.Exists(ctx, key).Result()

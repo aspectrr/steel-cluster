@@ -217,7 +217,11 @@ func (o *Orchestrator) createSession(c *gin.Context) {
 		Timeout int            `json:"timeout"`
 		Options map[string]any `json:"options"`
 	}
-	_ = json.Unmarshal(bodyBytes, &parsed)
+	if len(bodyBytes) > 2 {
+		if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+			slog.Debug("Failed to parse session body, using defaults", "error", err)
+		}
+	}
 	timeout := parsed.Timeout
 	if timeout == 0 {
 		timeout = o.config.SessionTimeoutDefault
@@ -509,7 +513,7 @@ func (o *Orchestrator) releaseSession(c *gin.Context) {
 
 	// Forward release to the browser pod first (if session is live).
 	if err == nil && session.Status == "live" {
-		_, respBody, fwdErr := o.forwardToBrowser(
+		status, respBody, fwdErr := o.forwardToBrowser(
 			c.Request.Context(), session,
 			http.MethodPost, fmt.Sprintf("/v1/sessions/%s/release", sessionID), nil,
 		)
@@ -528,7 +532,7 @@ func (o *Orchestrator) releaseSession(c *gin.Context) {
 		slog.Info("Session deleted", "sessionId", sessionID)
 
 		if fwdErr == nil {
-			c.Data(200, "application/json", respBody)
+			c.Data(status, "application/json", respBody)
 			return
 		}
 	} else {
@@ -1062,6 +1066,13 @@ func (o *Orchestrator) cleanupOrphans(ctx context.Context) {
 			_ = o.redis.RemoveFromIndex(ctx, sessionID)
 			slog.Info("Cleaned orphaned session", "sessionId", sessionID, "service", svcName)
 		}
+	}
+
+	// Prune expired session IDs from the Redis index set.
+	if removed, err := o.redis.CleanupStaleIndex(ctx); err != nil {
+		slog.Warn("Janitor: failed to cleanup stale index", "error", err)
+	} else if removed > 0 {
+		slog.Info("Janitor: pruned stale index entries", "count", removed)
 	}
 
 	// Clean up stale prewarm pods that have been running > 30 minutes without being claimed.
