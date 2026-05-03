@@ -71,12 +71,12 @@ helm install steel-cluster ./helm/steel-cluster/ \
 
 ```bash
 kubectl get pods -n browser-sessions
-curl http://localhost:30080/v1/health
+curl http://localhost:3000/v1/health
 ```
 
 ### 4. Open the Web UI
 
-Navigate to **http://localhost:30081** in your browser.
+Navigate to **http://localhost:5173** in your browser.
 
 The Web UI lets you:
 
@@ -85,7 +85,7 @@ The Web UI lets you:
 - See session details, pod info, and connection URLs
 - Delete sessions
 
-API requests from the Web UI are proxied through nginx to the orchestrator at `localhost:30080`.
+API requests from the Web UI are proxied through nginx to the orchestrator at `localhost:3000`.
 
 ## API Reference
 
@@ -129,7 +129,7 @@ swag init -g main.go -o ./docs --parseDependency --parseInternal
 **Create a session:**
 
 ```bash
-curl -X POST http://localhost:30080/v1/sessions \
+curl -X POST http://localhost:3000/v1/sessions \
   -H "Content-Type: application/json" \
   -d '{"timeout": 600}'
 ```
@@ -152,7 +152,7 @@ Response:
 import puppeteer from "puppeteer-core";
 
 const browser = await puppeteer.connect({
-  browserWSEndpoint: `ws://localhost:30080/v1/sessions/${sessionId}/cdp/devtools/browser/${browserId}`,
+  browserWSEndpoint: `ws://localhost:3000/v1/sessions/${sessionId}/cdp/devtools/browser/${browserId}`,
 });
 
 const page = await browser.newPage();
@@ -163,7 +163,7 @@ const title = await page.$eval(".titleline > a", (el) => el.textContent);
 **Health check:**
 
 ```bash
-curl http://localhost:30080/v1/health
+curl http://localhost:3000/v1/health
 ```
 
 Response:
@@ -197,35 +197,35 @@ The orchestrator maintains a configurable pool of pre-warmed browser pods for ne
 
 ## Testing Locally
 
-### Web UI (http://localhost:30081)
+### Web UI (http://localhost:5173)
 
 1. Deploy everything (see Quick Start)
-2. Open **http://localhost:30081** in your browser
+2. Open **http://localhost:5173** in your browser
 3. Click "Create Session" — should be near-instant from warm pool
 4. See the session appear in the list with its ID, status, and pod name
 5. Click a session to see details
 6. Click "Delete" to tear down a session and its browser pod
 
-### API with curl (http://localhost:30080)
+### API with curl (http://localhost:3000)
 
 ```bash
 # Create a session
-SESSION=$(curl -s -X POST http://localhost:30080/v1/sessions | python3 -c "import json,sys; print(json.load(sys.stdin)['sessionId'])")
+SESSION=$(curl -s -X POST http://localhost:3000/v1/sessions | python3 -c "import json,sys; print(json.load(sys.stdin)['sessionId'])")
 echo "Session: $SESSION"
 
 # Check health (should show 1 session, 2 warm pods)
-curl -s http://localhost:30080/v1/health | python3 -m json.tool
+curl -s http://localhost:3000/v1/health | python3 -m json.tool
 
 # List sessions
-curl -s http://localhost:30080/v1/sessions | python3 -m json.tool
+curl -s http://localhost:3000/v1/sessions | python3 -m json.tool
 
 # Delete the session
-curl -X DELETE http://localhost:30080/v1/sessions/$SESSION
+curl -X DELETE http://localhost:3000/v1/sessions/$SESSION
 ```
 
-### API Docs (http://localhost:30080/documentation)
+### API Docs (http://localhost:3000/documentation)
 
-Open **http://localhost:30080/documentation** for the interactive Scalar API docs.
+Open **http://localhost:3000/documentation** for the interactive Scalar API docs.
 
 ### E2E Tests
 
@@ -294,9 +294,9 @@ steel-cluster/
 
 | Port  | Service                 | URL                                  |
 | ----- | ----------------------- | ------------------------------------ |
-| 30300 | Orchestrator (NodePort) | http://localhost:30080/v1/health     |
-| 30301 | Web UI (NodePort)       | http://localhost:30081               |
-| 30300 | API Docs                | http://localhost:30080/documentation |
+| 30300 | Orchestrator (NodePort) | http://localhost:3000/v1/health     |
+| 30301 | Web UI (NodePort)       | http://localhost:5173               |
+| 30300 | API Docs                | http://localhost:3000/documentation |
 
 ## Configuration
 

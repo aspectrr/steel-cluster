@@ -4,10 +4,9 @@ metadata:
   name: browser-orchestrator
   namespace: browser-sessions
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: browser-orchestrator
   ports:
     - port: 3000
       targetPort: 3000
-      nodePort: 30080
