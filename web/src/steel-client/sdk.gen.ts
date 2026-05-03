@@ -100,7 +100,7 @@ export const deleteSessionsBySessionId = <ThrowOnError extends boolean = false>(
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}",
+    url: "/v1/sessions/{sessionId}",
     ...options,
   });
 };
@@ -110,7 +110,7 @@ export const getSession = <ThrowOnError extends boolean = false>(
 ) => {
   return (options.client ?? client).get<SessionResponse, unknown, ThrowOnError>(
     {
-      url: "/sessions/{sessionId}",
+      url: "/v1/sessions/{sessionId}",
       ...options,
     },
   );
@@ -126,7 +126,7 @@ export const getSessionsBySessionIdStatus = <
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}/status",
+    url: "/v1/sessions/{sessionId}/status",
     ...options,
   });
 };
@@ -139,7 +139,7 @@ export const getHealth = <ThrowOnError extends boolean = false>(
     unknown,
     ThrowOnError
   >({
-    url: "/health",
+    url: "/v1/health",
     ...options,
   });
 };
@@ -163,7 +163,7 @@ export const deleteSessionsBySessionIdBy__ = <
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}/{*}",
+    url: "/v1/sessions/{sessionId}/{*}",
     ...options,
   });
 };
@@ -178,7 +178,7 @@ export const getSessionsBySessionIdBy__ = <
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}/{*}",
+    url: "/v1/sessions/{sessionId}/{*}",
     ...options,
   });
 };
@@ -193,7 +193,7 @@ export const headSessionsBySessionIdBy__ = <
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}/{*}",
+    url: "/v1/sessions/{sessionId}/{*}",
     ...options,
   });
 };
@@ -208,7 +208,7 @@ export const optionsSessionsBySessionIdBy__ = <
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}/{*}",
+    url: "/v1/sessions/{sessionId}/{*}",
     ...options,
   });
 };
@@ -223,7 +223,7 @@ export const patchSessionsBySessionIdBy__ = <
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}/{*}",
+    url: "/v1/sessions/{sessionId}/{*}",
     ...options,
   });
 };
@@ -238,7 +238,7 @@ export const postSessionsBySessionIdBy__ = <
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}/{*}",
+    url: "/v1/sessions/{sessionId}/{*}",
     ...options,
   });
 };
@@ -253,7 +253,7 @@ export const putSessionsBySessionIdBy__ = <
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}/{*}",
+    url: "/v1/sessions/{sessionId}/{*}",
     ...options,
   });
 };
@@ -268,7 +268,7 @@ export const traceSessionsBySessionIdBy__ = <
     unknown,
     ThrowOnError
   >({
-    url: "/sessions/{sessionId}/{*}",
+    url: "/v1/sessions/{sessionId}/{*}",
     ...options,
   });
 };

@@ -22,7 +22,7 @@ export type GetSessionsData = {
   body?: never;
   path?: never;
   query?: never;
-  url: "/sessions";
+  url: "/v1/sessions";
 };
 
 export type SessionsResponse = {
@@ -155,7 +155,7 @@ export type CreateSessionRequest = {
   body?: CreateSessionRequest;
   path?: never;
   query?: never;
-  url: "/sessions";
+  url: "/v1/sessions";
 };
 
 export type CreateSessionResponses = {
@@ -171,7 +171,7 @@ export type DeleteSessionsBySessionIdData = {
     sessionId: string;
   };
   query?: never;
-  url: "/sessions/{sessionId}";
+  url: "/v1/sessions/{sessionId}";
 };
 
 export type DeleteSessionsBySessionIdResponses = {
@@ -187,7 +187,7 @@ export type SessionRequest = {
     sessionId: string;
   };
   query?: never;
-  url: "/sessions/{sessionId}";
+  url: "/v1/sessions/{sessionId}";
 };
 
 export type SessionReleaseRequest = {
@@ -196,7 +196,7 @@ export type SessionReleaseRequest = {
     sessionId: string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/release";
+  url: "/v1/sessions/{sessionId}/release";
 };
 
 export type ReleaseSessionResponse = {
@@ -333,7 +333,7 @@ export type GetSessionsBySessionIdStatusData = {
     sessionId: string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/status";
+  url: "/v1/sessions/{sessionId}/status";
 };
 
 export type GetSessionsBySessionIdStatusResponses = {
@@ -347,7 +347,7 @@ export type GetHealthData = {
   body?: never;
   path?: never;
   query?: never;
-  url: "/health";
+  url: "/v1/health";
 };
 
 export type GetHealthResponses = {
@@ -378,7 +378,7 @@ export type DeleteSessionsBySessionIdBy__Data = {
     "*": string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/{*}";
+  url: "/v1/sessions/{sessionId}/{*}";
 };
 
 export type DeleteSessionsBySessionIdBy__Responses = {
@@ -395,7 +395,7 @@ export type GetSessionsBySessionIdBy__Data = {
     "*": string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/{*}";
+  url: "/v1/sessions/{sessionId}/{*}";
 };
 
 export type GetSessionsBySessionIdBy__Responses = {
@@ -412,7 +412,7 @@ export type HeadSessionsBySessionIdBy__Data = {
     "*": string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/{*}";
+  url: "/v1/sessions/{sessionId}/{*}";
 };
 
 export type HeadSessionsBySessionIdBy__Responses = {
@@ -429,7 +429,7 @@ export type OptionsSessionsBySessionIdBy__Data = {
     "*": string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/{*}";
+  url: "/v1/sessions/{sessionId}/{*}";
 };
 
 export type OptionsSessionsBySessionIdBy__Responses = {
@@ -446,7 +446,7 @@ export type PatchSessionsBySessionIdBy__Data = {
     "*": string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/{*}";
+  url: "/v1/sessions/{sessionId}/{*}";
 };
 
 export type PatchSessionsBySessionIdBy__Responses = {
@@ -463,7 +463,7 @@ export type PostSessionsBySessionIdBy__Data = {
     "*": string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/{*}";
+  url: "/v1/sessions/{sessionId}/{*}";
 };
 
 export type PostSessionsBySessionIdBy__Responses = {
@@ -480,7 +480,7 @@ export type PutSessionsBySessionIdBy__Data = {
     "*": string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/{*}";
+  url: "/v1/sessions/{sessionId}/{*}";
 };
 
 export type PutSessionsBySessionIdBy__Responses = {
@@ -497,7 +497,7 @@ export type TraceSessionsBySessionIdBy__Data = {
     "*": string;
   };
   query?: never;
-  url: "/sessions/{sessionId}/{*}";
+  url: "/v1/sessions/{sessionId}/{*}";
 };
 
 export type TraceSessionsBySessionIdBy__Responses = {

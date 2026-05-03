@@ -2,16 +2,16 @@ import { useState } from "react";
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import { useSessionsContext } from "@/hooks/use-sessions-context";
+// import { useSessionsContext } from "@/hooks/use-sessions-context";
 
-import { GetSessionResponse } from "@/steel-client";
+import { SessionResponse } from "@/steel-client";
 
 import SessionDetails from "./session-details";
 import SessionLogs from "./session-logs";
 
 interface SessionConsoleProps {
   id: string;
-  sessionStatus: GetSessionResponse["status"];
+  sessionStatus: SessionResponse["status"];
 }
 
 const tabs: { value: "details" | "logs"; label: string }[] = [
@@ -19,10 +19,13 @@ const tabs: { value: "details" | "logs"; label: string }[] = [
   { value: "logs", label: "Logs" },
 ];
 
-export default function SessionConsole({ id, sessionStatus }: SessionConsoleProps) {
+export default function SessionConsole({
+  id,
+  sessionStatus,
+}: SessionConsoleProps) {
   const [activeTab, setActiveTab] = useState<"details" | "logs">("details");
-  const { useSessionLogs } = useSessionsContext();
-  useSessionLogs(id);
+  // const { useSessionLogs } = useSessionsContext();
+  // useSessionLogs(id);
 
   return (
     <div className="flex flex-col w-full h-full">
@@ -35,7 +38,9 @@ export default function SessionConsole({ id, sessionStatus }: SessionConsoleProp
                 value={tab.value}
                 onClick={() => setActiveTab(tab.value)}
                 className={`!bg-transparent !box-shadow-none rounded-none p-4 ${
-                  activeTab === tab.value ? "border-b-2 border-b-[var(--sand-11)]" : ""
+                  activeTab === tab.value
+                    ? "border-b-2 border-b-[var(--sand-11)]"
+                    : ""
                 }`}
               >
                 {tab.label}
@@ -49,7 +54,9 @@ export default function SessionConsole({ id, sessionStatus }: SessionConsoleProp
       </div>
 
       {activeTab === "details" && <SessionDetails id={id} />}
-      {activeTab === "logs" && <SessionLogs id={id} sessionStatus={sessionStatus} />}
+      {activeTab === "logs" && (
+        <SessionLogs id={id} sessionStatus={sessionStatus} />
+      )}
     </div>
   );
 }

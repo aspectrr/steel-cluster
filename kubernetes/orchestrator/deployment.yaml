@@ -4,7 +4,6 @@ metadata:
   name: browser-orchestrator
   namespace: browser-sessions
 spec:
-  # replicas: 1 # 2
   selector:
     matchLabels:
       app: browser-orchestrator
@@ -17,12 +16,11 @@ spec:
       containers:
         - name: orchestrator
           image: browser-orchestrator:latest
-          imagePullPolicy: Never # Local development
+          imagePullPolicy: Never
+          command: ["/app/orchestrator"]
           ports:
             - containerPort: 3000
           env:
-            - name: NODE_ENV
-              value: "production"
             - name: REDIS_HOST
               value: "redis"
             - name: REDIS_PORT
@@ -30,17 +28,17 @@ spec:
             - name: K8S_NAMESPACE
               value: "browser-sessions"
             - name: BROWSER_IMAGE
-              value: "ghcr.io/steel-dev/steel-browser:latest"
-            - name: PREWARM_POOL_SIZE
+              value: "ghcr.io/steel-dev/steel-browser-api:latest"
+            - name: BROWSER_PORT
+              value: "3000"
+            - name: WARM_POOL_SIZE
               value: "2"
             - name: MAX_SESSIONS
               value: "100"
             - name: SESSION_TIMEOUT
               value: "1800"
-            - name: JOB_TTL_SECONDS
-              value: "3600"
             - name: BASE_PATH
-              value: "localhost"
+              value: ""
           resources:
             requests:
               memory: "256Mi"
@@ -50,13 +48,13 @@ spec:
               cpu: "500m"
           livenessProbe:
             httpGet:
-              path: /health
+              path: /v1/health
               port: 3000
-            initialDelaySeconds: 30
+            initialDelaySeconds: 15
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /health
+              path: /v1/health
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 5

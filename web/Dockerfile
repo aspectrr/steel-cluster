@@ -1,33 +1,32 @@
-FROM node:lts-alpine3.19 AS pruner
-RUN apk update
-RUN apk add --no-cache libc6-compat
+FROM node:lts-alpine AS builder
 WORKDIR /app
-COPY . .
-
-FROM node:lts-alpine3.19 AS builder
-RUN apk update
-RUN apk add --no-cache libc6-compat curl
-WORKDIR /app
-COPY --from=pruner /app/package-lock.json ./package-lock.json
-COPY --from=pruner /app/ .
+COPY package-lock.json package.json ./
 RUN npm ci
-ENV NODE_ENV=production
+COPY . .
 RUN npm run build
 
-FROM node:lts-alpine3.19 AS runner
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY <<'EOF' /etc/nginx/conf.d/default.conf
+server {
+    listen 3001;
+    root /usr/share/nginx/html;
+    index index.html;
 
-WORKDIR /app
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
 
-# Security and permissions
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 web
-USER web
-
-# TODO: We are copying everything over, we probably don't need it all.
-COPY --from=builder --chown=web:nodejs /app/ .
-
-# Expose the port your web server runs on, assuming it's 5173
+    # Proxy API requests to the orchestrator
+    location /v1/ {
+        proxy_pass http://browser-orchestrator:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400;
+    }
+}
+EOF
 EXPOSE 3001
-
-WORKDIR /app/apps/web
-CMD ["npm", "run", "start"]
+CMD ["nginx", "-g", "daemon off;"]
