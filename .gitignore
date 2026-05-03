@@ -4,3 +4,5 @@
 .pi
 .pi-lens
 .zed
+dist
+.DS_Store

@@ -3,11 +3,12 @@
  * connect Puppeteer, and scrape Hacker News.
  *
  * Flow:
- *   1. POST /v1/sessions on the orchestrator → spins up a browser pod
- *   2. POST /v1/sessions/{id}/v1/sessions on the browser → launches a browser instance
- *   3. Connect Puppeteer via the browser's websocketUrl
- *   4. Navigate to Hacker News, scrape top 5 stories
- *   5. Release the browser session, delete the orchestrator session
+ *   1. POST /v1/sessions on the orchestrator → spins up a browser pod AND
+ *      forwards to the browser pod to launch a browser instance in one step.
+ *      Returns the full Steel SessionDetails response.
+ *   2. Connect Puppeteer via the browser's websocketUrl through CDP proxy
+ *   3. Navigate to Hacker News, scrape top 5 stories
+ *   4. Release the session
  */
 
 import puppeteer from "puppeteer-core";
@@ -15,87 +16,104 @@ import puppeteer from "puppeteer-core";
 const ORCHESTRATOR_URL =
 	process.env.ORCHESTRATOR_URL || "http://localhost:3000";
 
+// ─── Types ──────────────────────────────────────────────
+
+/** Steel SessionDetails — returned by POST /v1/sessions and GET /v1/sessions/:id */
+interface SessionDetails {
+	id: string;
+	createdAt: string;
+	status: string;
+	duration: number;
+	eventCount: number;
+	timeout: number;
+	creditsUsed: number;
+	websocketUrl: string;
+	debugUrl: string;
+	debuggerUrl: string;
+	sessionViewerUrl: string;
+	userAgent: string;
+	dimensions?: { width: number; height: number };
+}
+
 // ─── Helpers ──────────────────────────────────────────────
 
-interface OrchestratorSession {
-	sessionId: string;
-	status: string;
-	serviceHost?: string;
-	serviceName?: string;
-	podName?: string;
-	error?: string;
-}
-
-interface BrowserSession {
-	id: string;
-	status: string;
-	websocketUrl: string;
-}
-
-async function createOrchestratorSession(): Promise<string> {
+async function createSession(): Promise<SessionDetails> {
 	const res = await fetch(`${ORCHESTRATOR_URL}/v1/sessions`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ timeout: 3600 }),
 	});
-	const data: OrchestratorSession = await res.json();
+	if (!res.ok) {
+		throw new Error(
+			`Create session failed (${res.status}): ${await res.text()}`,
+		);
+	}
+	const data = (await res.json()) as SessionDetails;
 	if (data.status !== "live") {
 		throw new Error(`Session not live: ${JSON.stringify(data)}`);
-	}
-	return data.sessionId;
-}
-
-async function waitForBrowserPod(sessionId: string, timeoutMs = 60000) {
-	const start = Date.now();
-	while (Date.now() - start < timeoutMs) {
-		try {
-			const res = await fetch(
-				`${ORCHESTRATOR_URL}/v1/sessions/${sessionId}/v1/health`,
-			);
-			if (res.ok) return;
-		} catch {}
-		await new Promise((r) => setTimeout(r, 2000));
-	}
-	throw new Error(
-		`Browser pod for session ${sessionId} did not become ready in ${timeoutMs}ms`,
-	);
-}
-
-async function createBrowserSession(
-	sessionId: string,
-): Promise<BrowserSession> {
-	// Wait for the browser pod to be ready first
-	await waitForBrowserPod(sessionId);
-
-	const res = await fetch(
-		`${ORCHESTRATOR_URL}/v1/sessions/${sessionId}/v1/sessions`,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ url: "about:blank" }),
-		},
-	);
-	const data: BrowserSession = await res.json();
-	if (!data.id) {
-		throw new Error(`Browser session failed: ${JSON.stringify(data)}`);
 	}
 	return data;
 }
 
-async function deleteOrchestratorSession(sessionId: string) {
-	await fetch(`${ORCHESTRATOR_URL}/v1/sessions/${sessionId}`, {
-		method: "DELETE",
-	});
+async function releaseSession(sessionId: string) {
+	const res = await fetch(
+		`${ORCHESTRATOR_URL}/v1/sessions/${sessionId}/release`,
+		{ method: "POST" },
+	);
+	const data = (await res.json()) as { success?: boolean; [key: string]: any };
+	if (data.success === false) {
+		console.warn(
+			`   ⚠ Release returned success=false: ${JSON.stringify(data)}`,
+		);
+	}
 }
 
-async function releaseBrowserSession(
-	sessionId: string,
-	browserSessionId: string,
-) {
-	await fetch(
-		`${ORCHESTRATOR_URL}/v1/sessions/${sessionId}/v1/sessions/${browserSessionId}`,
-		{ method: "DELETE" },
-	).catch(() => {});
+async function getSessionDetails(sessionId: string): Promise<SessionDetails> {
+	const res = await fetch(`${ORCHESTRATOR_URL}/v1/sessions/${sessionId}`);
+	if (!res.ok) {
+		throw new Error(
+			`Get session details failed (${res.status}): ${await res.text()}`,
+		);
+	}
+	return (await res.json()) as SessionDetails;
+}
+
+async function listSessions(): Promise<{
+	sessions: SessionDetails[];
+	totalCount: number;
+}> {
+	const res = await fetch(`${ORCHESTRATOR_URL}/v1/sessions`);
+	if (!res.ok) {
+		throw new Error(
+			`List sessions failed (${res.status}): ${await res.text()}`,
+		);
+	}
+	return (await res.json()) as {
+		sessions: SessionDetails[];
+		totalCount: number;
+	};
+}
+
+async function getSessionContext(sessionId: string) {
+	const res = await fetch(
+		`${ORCHESTRATOR_URL}/v1/sessions/${sessionId}/context`,
+	);
+	if (!res.ok) {
+		throw new Error(`Get context failed (${res.status}): ${await res.text()}`);
+	}
+	return (await res.json()) as Record<string, any>;
+}
+
+async function getLiveDetails(sessionId: string) {
+	const res = await fetch(
+		`${ORCHESTRATOR_URL}/v1/sessions/${sessionId}/live-details`,
+	);
+	if (!res.ok) {
+		throw new Error(
+			`Get live-details failed (${res.status}): ${await res.text()}`,
+		);
+	}
+	return (await res.json()) as Record<string, any>;
 }
 
 // Get the CDP websocket URL for a browser session.
@@ -105,7 +123,7 @@ async function getCdpWebsocketUrl(sessionId: string): Promise<string> {
 	const res = await fetch(
 		`${ORCHESTRATOR_URL}/v1/sessions/${sessionId}/json/version`,
 	);
-	const data: { webSocketDebuggerUrl?: string } = await res.json();
+	const data = (await res.json()) as { webSocketDebuggerUrl?: string };
 	const wsUrl = data.webSocketDebuggerUrl;
 	if (!wsUrl) {
 		throw new Error(
@@ -118,38 +136,93 @@ async function getCdpWebsocketUrl(sessionId: string): Promise<string> {
 	return `${orchestratorWs}/v1/sessions/${sessionId}/cdp${path}`;
 }
 
-// ─── Test ──────────────────────────────────────────────
+// ─── Test: API Response Format ─────────────────────────────
+
+async function testApiResponseFormat() {
+	console.log("\n🧪 Test: API response format matches Steel API");
+	console.log("=".repeat(50));
+
+	const session = await createSession();
+	console.log(`   ✓ Created session: ${session.id}`);
+
+	// Verify required Steel SessionDetails fields
+	const requiredFields = [
+		"id",
+		"createdAt",
+		"status",
+		"duration",
+		"eventCount",
+		"timeout",
+		"creditsUsed",
+		"websocketUrl",
+		"debugUrl",
+		"sessionViewerUrl",
+	];
+	for (const field of requiredFields) {
+		if ((session as any)[field] === undefined) {
+			throw new Error(`Missing required field '${field}' in create response`);
+		}
+	}
+	console.log(`   ✓ All required fields present in create response`);
+
+	// GET session details
+	const details = await getSessionDetails(session.id);
+	if (details.id !== session.id) throw new Error(`Details ID mismatch`);
+	if (details.status !== "live") throw new Error(`Details status not live`);
+	console.log(`   ✓ GET /sessions/:id returns full Steel SessionDetails`);
+
+	// GET context
+	const context = await getSessionContext(session.id);
+	if (typeof context.cookies === "undefined")
+		throw new Error(`Missing cookies in context`);
+	console.log(`   ✓ GET /sessions/:id/context returns browser context`);
+
+	// GET live-details
+	const live = await getLiveDetails(session.id);
+	if (!Array.isArray(live.pages))
+		throw new Error(`Missing pages in live-details`);
+	console.log(
+		`   ✓ GET /sessions/:id/live-details returns live state (${live.pages.length} page(s))`,
+	);
+
+	// List sessions
+	const list = await listSessions();
+	if (typeof list.totalCount !== "number")
+		throw new Error(`Missing totalCount`);
+	const found = list.sessions.some((s) => s.id === session.id);
+	if (!found) throw new Error(`Session not found in list`);
+	console.log(`   ✓ GET /sessions returns array with totalCount`);
+
+	await releaseSession(session.id);
+	console.log(`   ✓ Session released`);
+}
+
+// ─── Test: Single Session ──────────────────────────────────
 
 async function testSingleSession() {
 	console.log("\n🧪 Test: Single session — scrape Hacker News");
 	console.log("=".repeat(50));
 
 	let sessionId: string | undefined;
-	let browserSessionId: string | undefined;
 	let browser: puppeteer.Browser | undefined;
 
 	try {
-		// 1. Create orchestrator session (spins up a browser pod)
-		console.log("1. Creating orchestrator session...");
-		sessionId = await createOrchestratorSession();
+		// 1. Create session (orchestrator + browser in one step)
+		console.log("1. Creating session...");
+		const session = await createSession();
+		sessionId = session.id;
 		console.log(`   ✓ Session: ${sessionId}`);
+		console.log(`   websocketUrl: ${session.websocketUrl}`);
 
-		// 2. Create browser instance inside the pod
-		console.log("2. Launching browser instance...");
-		const browserSession = await createBrowserSession(sessionId);
-		browserSessionId = browserSession.id;
-		console.log(`   ✓ Browser: ${browserSessionId}`);
-		console.log(`   websocketUrl: ${browserSession.websocketUrl}`);
-
-		// 3. Connect Puppeteer via CDP
-		console.log("3. Connecting Puppeteer...");
+		// 2. Connect Puppeteer via CDP
+		console.log("2. Connecting Puppeteer...");
 		const wsEndpoint = await getCdpWebsocketUrl(sessionId);
 		console.log(`   wsEndpoint: ${wsEndpoint}`);
 		browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
 		console.log("   ✓ Connected");
 
-		// 4. Scrape Hacker News
-		console.log("4. Navigating to Hacker News...");
+		// 3. Scrape Hacker News
+		console.log("3. Navigating to Hacker News...");
 		const page = await browser.newPage();
 		await page.goto("https://news.ycombinator.com", {
 			waitUntil: "networkidle2",
@@ -191,27 +264,22 @@ async function testSingleSession() {
 
 		await page.close();
 	} finally {
-		// 5. Cleanup
-		if (browser) {
-			browser.disconnect();
-		}
-		if (browserSessionId && sessionId) {
-			await releaseBrowserSession(sessionId, browserSessionId);
-		}
+		if (browser) browser.disconnect();
 		if (sessionId) {
-			await deleteOrchestratorSession(sessionId);
+			await releaseSession(sessionId);
 			console.log("   ✓ Session cleaned up");
 		}
 	}
 }
+
+// ─── Test: Concurrent Sessions ────────────────────────────
 
 async function testConcurrentSessions() {
 	console.log("\n🧪 Test: 3 concurrent sessions — isolated scraping");
 	console.log("=".repeat(50));
 
 	type SessionInfo = {
-		sessionId: string;
-		browserSessionId: string;
+		session: SessionDetails;
 		browser: puppeteer.Browser;
 	};
 
@@ -221,39 +289,27 @@ async function testConcurrentSessions() {
 		// 1. Create 3 sessions in parallel
 		console.log("1. Creating 3 sessions in parallel...");
 		const results = await Promise.all([
-			createOrchestratorSession(),
-			createOrchestratorSession(),
-			createOrchestratorSession(),
+			createSession(),
+			createSession(),
+			createSession(),
 		]);
 		console.log(
-			`   ✓ Sessions: ${results.map((s) => s.slice(0, 8)).join(", ")}...`,
+			`   ✓ Sessions: ${results.map((s) => s.id.slice(0, 8)).join(", ")}...`,
 		);
 
-		// 2. Launch browser in each session
-		console.log("2. Launching browsers in each session...");
-		const browserSessions = await Promise.all(
-			results.map((sid) => createBrowserSession(sid)),
-		);
-
-		// 3. Connect Puppeteer to each
-		console.log("3. Connecting Puppeteer to each...");
-		for (let i = 0; i < results.length; i++) {
-			const sessionId = results[i];
-			const bs = browserSessions[i];
-			const wsEndpoint = await getCdpWebsocketUrl(sessionId);
+		// 2. Connect Puppeteer to each
+		console.log("2. Connecting Puppeteer to each...");
+		for (const s of results) {
+			const wsEndpoint = await getCdpWebsocketUrl(s.id);
 			const browser = await puppeteer.connect({
 				browserWSEndpoint: wsEndpoint,
 			});
-			sessions.push({
-				sessionId,
-				browserSessionId: (bs as any).id as string,
-				browser,
-			});
+			sessions.push({ session: s, browser });
 		}
 		console.log(`   ✓ All 3 browsers connected`);
 
-		// 4. Each session scrapes a different page
-		console.log("4. Scraping different pages concurrently...");
+		// 3. Each session scrapes a different page
+		console.log("3. Scraping different pages concurrently...");
 		const urls = [
 			"https://news.ycombinator.com",
 			"https://news.ycombinator.com/newest",
@@ -276,7 +332,7 @@ async function testConcurrentSessions() {
 
 				await page.close();
 				return {
-					session: s.sessionId.slice(0, 8),
+					session: s.session.id.slice(0, 8),
 					page: urls[i],
 					title,
 					topStory,
@@ -307,11 +363,9 @@ async function testConcurrentSessions() {
 		}
 		console.log("   ✓ All sessions scraped successfully");
 	} finally {
-		// Cleanup all sessions
 		for (const s of sessions) {
 			s.browser.disconnect();
-			await releaseBrowserSession(s.sessionId, s.browserSessionId);
-			await deleteOrchestratorSession(s.sessionId);
+			await releaseSession(s.session.id);
 		}
 		if (sessions.length > 0) {
 			console.log("   ✓ All sessions cleaned up");
@@ -326,14 +380,15 @@ async function main() {
 	console.log(`Orchestrator: ${ORCHESTRATOR_URL}`);
 
 	// Preflight check
-	const health = await fetch(`${ORCHESTRATOR_URL}/v1/health`).then((r) =>
+	const health = (await fetch(`${ORCHESTRATOR_URL}/v1/health`).then((r) =>
 		r.json(),
-	);
+	)) as { status: string; sessions: number; [key: string]: any };
 	if (health.status !== "ok") {
 		throw new Error(`Orchestrator unhealthy: ${JSON.stringify(health)}`);
 	}
 	console.log(`Health: ok (${health.sessions} existing sessions)`);
 
+	await testApiResponseFormat();
 	await testSingleSession();
 	await testConcurrentSessions();
 

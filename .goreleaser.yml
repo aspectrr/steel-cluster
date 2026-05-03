@@ -1,0 +1,52 @@
+version: 2
+
+project_name: steel-cluster
+
+builds:
+  - id: orchestrator
+    main: .
+    dir: ./orchestrator
+    binary: orchestrator
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+dockers:
+  - id: orchestrator
+    ids:
+      - orchestrator
+    goos: linux
+    goarch: amd64
+    dockerfile: orchestrator/goreleaser.Dockerfile
+    image_templates:
+      - "ghcr.io/aspectrr/steel-orchestrator:{{ .Version }}"
+      - "ghcr.io/aspectrr/steel-orchestrator:latest"
+    build_flag_templates:
+      - "--label=org.opencontainers.image.title=steel-orchestrator"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+
+  - id: web
+    dockerfile: web/goreleaser.Dockerfile
+    image_templates:
+      - "ghcr.io/aspectrr/steel-web:{{ .Version }}"
+      - "ghcr.io/aspectrr/steel-web:latest"
+    build_flag_templates:
+      - "--label=org.opencontainers.image.title=steel-web"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+    extra_files:
+      - web
+
+release:
+  github:
+    owner: aspectrr
+    name: steel-cluster

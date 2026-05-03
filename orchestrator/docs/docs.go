@@ -40,7 +40,7 @@ const docTemplate = `{
         },
         "/sessions": {
             "get": {
-                "description": "Returns all active and recent sessions.",
+                "description": "Returns all active and recent sessions with full Steel API details.",
                 "produces": [
                     "application/json"
                 ],
@@ -81,25 +81,40 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "201": {
+                        "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/main.CreateSessionResponse"
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
                         }
                     }
                 }
-            },
-            "delete": {
-                "description": "Deletes all sessions, their pods, and services.",
+            }
+        },
+        "/sessions/release": {
+            "post": {
+                "description": "Releases all sessions, their pods, and services.",
                 "produces": [
                     "application/json"
                 ],
@@ -114,13 +129,27 @@ const docTemplate = `{
                             "type": "object",
                             "additionalProperties": true
                         }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
                     }
                 }
             }
         },
         "/sessions/{sessionId}": {
             "get": {
-                "description": "Returns full session data including pod name, service host, and status.",
+                "description": "Returns full session data in the Steel API format.",
                 "produces": [
                     "application/json"
                 ],
@@ -141,29 +170,44 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/main.SessionData"
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
-            },
-            "delete": {
-                "description": "Deletes the session, its pod, and service.",
+            }
+        },
+        "/sessions/{sessionId}/release": {
+            "post": {
+                "description": "Releases the session, its pod, and service.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "sessions"
                 ],
-                "summary": "Delete a session",
+                "summary": "Release a session",
                 "parameters": [
                     {
                         "type": "string",
@@ -178,9 +222,28 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "boolean"
-                            }
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -227,29 +290,6 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "main.CreateSessionResponse": {
-            "type": "object",
-            "properties": {
-                "error": {
-                    "type": "string"
-                },
-                "podName": {
-                    "type": "string"
-                },
-                "serviceHost": {
-                    "type": "string"
-                },
-                "serviceName": {
-                    "type": "string"
-                },
-                "sessionId": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
-                }
-            }
-        },
         "main.HealthResponse": {
             "type": "object",
             "properties": {
@@ -269,42 +309,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "warmPoolReady": {
-                    "type": "integer"
-                }
-            }
-        },
-        "main.SessionData": {
-            "type": "object",
-            "properties": {
-                "createdAt": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "lastUsed": {
-                    "type": "string"
-                },
-                "notes": {
-                    "type": "string"
-                },
-                "options": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "podName": {
-                    "type": "string"
-                },
-                "serviceHost": {
-                    "type": "string"
-                },
-                "serviceName": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "timeoutSeconds": {
                     "type": "integer"
                 }
             }

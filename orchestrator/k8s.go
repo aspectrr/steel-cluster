@@ -100,7 +100,7 @@ func (k *K8sClient) makeBrowserPod(name, sessionID, role, basePath string) *core
 				{
 					Name:            "browser",
 					Image:           k.browserImage,
-					ImagePullPolicy: corev1.PullNever,
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					Env:             env,
 					Ports: []corev1.ContainerPort{
 						{ContainerPort: int32(k.browserPort), Name: "http", Protocol: corev1.ProtocolTCP},

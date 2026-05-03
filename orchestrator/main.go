@@ -7,8 +7,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -96,15 +99,6 @@ type SessionData struct {
 	Options        map[string]any `json:"options,omitempty"`
 }
 
-type CreateSessionResponse struct {
-	SessionID   string `json:"sessionId"`
-	Status      string `json:"status"`
-	ServiceHost string `json:"serviceHost,omitempty"`
-	ServiceName string `json:"serviceName,omitempty"`
-	PodName     string `json:"podName,omitempty"`
-	Error       string `json:"error,omitempty"`
-}
-
 type HealthResponse struct {
 	Status       string `json:"status"`
 	Sessions     int    `json:"sessions"`
@@ -150,49 +144,81 @@ func (o *Orchestrator) RegisterRoutes(r *gin.Engine) {
 
 	v1.POST("/sessions", o.createSession)
 	v1.GET("/sessions", o.listSessions)
-	v1.DELETE("/sessions", o.releaseAllSessions)
+	v1.POST("/sessions/release", o.releaseAllSessions)
 	v1.GET("/health", o.health)
 
-	// All paths under /sessions/:sessionId/* dispatch via sessionHandler.
-	v1.Any("/sessions/:sessionId/*path", o.sessionHandler)
+	// Individual session routes.
+	v1.GET("/sessions/:sessionId", o.getSessionDetails)
+	v1.GET("/sessions/:sessionId/status", o.getSessionStatus)
+	v1.POST("/sessions/:sessionId/release", o.releaseSession)
+
+	// Proxy catch-all (all methods, remaining paths).
+	v1.Any("/sessions/:sessionId/*path", o.proxyToSession)
 }
 
-// sessionHandler dispatches based on the path suffix under /sessions/:sessionId/*
-func (o *Orchestrator) sessionHandler(c *gin.Context) {
-	path := c.Param("path")
-	path = strings.TrimPrefix(path, "/")
+// ─── Browser Forwarding ────────────────────────────────────────
 
-	switch {
-	case path == "":
-		o.getSessionDetails(c)
-	case path == "status":
-		o.getSessionStatus(c)
-	default:
-		o.proxyToSession(c)
+// forwardToBrowser sends an HTTP request to the browser pod and returns the
+// status code and raw response body. Used to proxy Steel API requests through
+// the orchestrator so responses match the upstream Steel browser format.
+func (o *Orchestrator) forwardToBrowser(ctx context.Context, session SessionData, method, path string, body io.Reader) (int, []byte, error) {
+	targetURL := fmt.Sprintf("http://%s:%d%s", session.ServiceHost, o.config.BrowserPort, path)
+
+	req, err := http.NewRequestWithContext(ctx, method, targetURL, body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("create request: %w", err)
 	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("forward request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read response: %w", err)
+	}
+
+	return resp.StatusCode, respBody, nil
 }
 
 // ─── HTTP Handlers ─────────────────────────────────────────────
 
 // POST /v1/sessions — Create a new browser session.
 // Tries to claim a warm pod first; falls back to creating a fresh pod.
+// After k8s resources are ready, forwards the creation request to the browser
+// pod so the response matches the upstream Steel SessionDetails format.
 //
 // @Summary      Create a browser session
 // @Description  Creates a new browser session with an isolated pod. Claims a warm pod if available (~85ms), otherwise creates a fresh pod (~30s cold start).
 // @Tags         sessions
 // @Accept       json
 // @Produce      json
-// @Param        body  body  object  false  "Session options"  example({"timeout": 600})
-// @Success      200   {object}  CreateSessionResponse
-// @Failure      500   {object}  map[string]string
+// @Param        body  body  object  false  "Session options"
+// @Success      201   {object}  map[string]any
+// @Failure      400   {object}  map[string]any
+// @Failure      429   {object}  map[string]any
+// @Failure      500   {object}  map[string]any
 // @Router       /sessions [post]
 func (o *Orchestrator) createSession(c *gin.Context) {
-	var body struct {
+	// Read raw body so we can forward it to the browser pod.
+	bodyBytes, _ := io.ReadAll(c.Request.Body)
+	if len(bodyBytes) == 0 {
+		bodyBytes = []byte("{}")
+	}
+
+	// Parse only the orchestrator-specific fields.
+	var parsed struct {
 		Timeout int            `json:"timeout"`
 		Options map[string]any `json:"options"`
 	}
-	c.ShouldBindJSON(&body)
-	timeout := body.Timeout
+	_ = json.Unmarshal(bodyBytes, &parsed)
+	timeout := parsed.Timeout
 	if timeout == 0 {
 		timeout = o.config.SessionTimeoutDefault
 	}
@@ -209,29 +235,28 @@ func (o *Orchestrator) createSession(c *gin.Context) {
 		TimeoutSeconds: timeout,
 		ServiceName:    serviceName,
 		ServiceHost:    serviceHost,
-		Options:        body.Options,
+		Options:        parsed.Options,
 	}
+
+	// Check max sessions and claim warm pod atomically to prevent TOCTOU races.
+	o.warmMu.Lock()
+	active, err := o.k8s.ListActiveServices(c.Request.Context())
+	if err == nil && len(active) >= o.config.MaxSessions {
+		o.warmMu.Unlock()
+		c.JSON(429, gin.H{"message": "Max sessions reached", "error": "Max sessions reached"})
+		return
+	}
+
+	// Try to claim a warm pod while still holding the lock.
+	var podName string
+	claimed := o.claimWarmPodLocked(c.Request.Context(), sessionID)
+	o.warmMu.Unlock()
 
 	// Save initial state so janitor doesn't clean it up.
 	if err := o.redis.SaveSession(c.Request.Context(), session); err != nil {
 		slog.Error("Failed to save session", "error", err, "sessionId", sessionID)
 	}
 
-	// Check max sessions.
-	active, err := o.k8s.ListActiveServices(c.Request.Context())
-	if err == nil && len(active) >= o.config.MaxSessions {
-		session.Status = "failed"
-		session.Notes = "Max sessions reached"
-		_ = o.redis.SaveSession(c.Request.Context(), session)
-		c.JSON(200, CreateSessionResponse{
-			SessionID: sessionID, Status: "failed", Error: "Max sessions reached",
-		})
-		return
-	}
-
-	// Try to claim a warm pod.
-	var podName string
-	claimed := o.claimWarmPod(c.Request.Context(), sessionID)
 	if claimed != "" {
 		podName = claimed
 		slog.Info("Claimed warm pod for session", "podName", podName, "sessionId", sessionID)
@@ -244,9 +269,7 @@ func (o *Orchestrator) createSession(c *gin.Context) {
 			session.Status = "failed"
 			session.Notes = fmt.Sprintf("Failed to create pod: %v", err)
 			_ = o.redis.SaveSession(c.Request.Context(), session)
-			c.JSON(200, CreateSessionResponse{
-				SessionID: sessionID, Status: "failed", Error: session.Notes,
-			})
+			c.JSON(500, gin.H{"message": session.Notes, "error": "Failed to create pod"})
 			return
 		}
 		podName = pod
@@ -259,9 +282,7 @@ func (o *Orchestrator) createSession(c *gin.Context) {
 		session.Notes = fmt.Sprintf("Failed to create service: %v", err)
 		_ = o.redis.SaveSession(c.Request.Context(), session)
 		o.k8s.DeletePod(c.Request.Context(), podName)
-		c.JSON(200, CreateSessionResponse{
-			SessionID: sessionID, Status: "failed", Error: session.Notes,
-		})
+		c.JSON(500, gin.H{"message": session.Notes, "error": "Failed to create service"})
 		return
 	}
 
@@ -274,10 +295,14 @@ func (o *Orchestrator) createSession(c *gin.Context) {
 			_ = o.redis.SaveSession(c.Request.Context(), session)
 			o.k8s.DeleteService(c.Request.Context(), serviceName)
 			o.k8s.DeletePod(c.Request.Context(), podName)
-			c.JSON(200, CreateSessionResponse{
-				SessionID: sessionID, Status: "failed", Error: session.Notes,
-			})
+			c.JSON(500, gin.H{"message": session.Notes, "error": "Readiness failed"})
 			return
+		}
+	} else {
+		// Warm pod: the pod is ready but the service may not be routable yet.
+		// Do a shorter readiness wait to ensure DNS propagates.
+		if err := o.k8s.WaitForReadiness(c.Request.Context(), serviceName, 15*time.Second); err != nil {
+			slog.Warn("Service not routable for warm pod, will attempt forward anyway", "error", err, "sessionId", sessionID)
 		}
 	}
 
@@ -285,19 +310,50 @@ func (o *Orchestrator) createSession(c *gin.Context) {
 	_ = o.redis.SaveSession(c.Request.Context(), session)
 	slog.Info("Session live", "sessionId", sessionID, "podName", podName, "warm", claimed != "")
 
-	c.JSON(200, CreateSessionResponse{
-		SessionID:   sessionID,
-		Status:      "live",
-		ServiceHost: serviceHost,
-		ServiceName: serviceName,
-		PodName:     podName,
-	})
+	// Inject the orchestrator session ID into the forwarded request body
+	// so the browser pod uses our session ID.
+	var forwardBody map[string]any
+	_ = json.Unmarshal(bodyBytes, &forwardBody)
+	if forwardBody == nil {
+		forwardBody = map[string]any{}
+	}
+	forwardBody["sessionId"] = sessionID
+	forwardBodyBytes, _ := json.Marshal(forwardBody)
+
+	// Forward the create request to the browser pod.
+	status, respBody, fwdErr := o.forwardToBrowser(
+		c.Request.Context(), session,
+		http.MethodPost, "/v1/sessions",
+		bytes.NewReader(forwardBodyBytes),
+	)
+	if fwdErr != nil {
+		// Browser pod unreachable — return a minimal Steel-compatible response.
+		slog.Warn("Failed to forward create to browser pod, returning orchestrator response", "error", fwdErr, "sessionId", sessionID)
+		c.JSON(201, gin.H{
+			"id":               sessionID,
+			"createdAt":        session.CreatedAt,
+			"status":           "live",
+			"duration":         0,
+			"eventCount":       0,
+			"timeout":          timeout * 1000,
+			"dimensions":       nil,
+			"websocketUrl":     "",
+			"debugUrl":         "",
+			"sessionViewerUrl": "",
+			"userAgent":        "",
+		})
+		return
+	}
+
+	// Return the browser pod's response as-is.
+	c.Data(status, "application/json", respBody)
 }
 
 // GET /v1/sessions — List all sessions.
+// Queries each live browser pod for full Steel SessionDetails.
 //
 // @Summary      List all sessions
-// @Description  Returns all active and recent sessions.
+// @Description  Returns all active and recent sessions with full Steel API details.
 // @Tags         sessions
 // @Produce      json
 // @Success      200  {object}  map[string]any
@@ -305,33 +361,111 @@ func (o *Orchestrator) createSession(c *gin.Context) {
 func (o *Orchestrator) listSessions(c *gin.Context) {
 	sessions, err := o.redis.ListSessions(c.Request.Context())
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(500, gin.H{"message": err.Error(), "error": "Failed to list sessions"})
 		return
 	}
 	if sessions == nil {
-		sessions = []SessionData{}
+		c.JSON(200, gin.H{"sessions": []any{}, "totalCount": 0})
+		return
 	}
-	c.JSON(200, gin.H{"sessions": sessions, "count": len(sessions)})
+
+	type listResult struct {
+		index    int
+		details  json.RawMessage
+		fallback SessionData
+	}
+
+	results := make([]listResult, len(sessions))
+	var wg sync.WaitGroup
+
+	for i, s := range sessions {
+		wg.Add(1)
+		go func(idx int, sess SessionData) {
+			defer wg.Done()
+			if sess.Status != "live" {
+				results[idx] = listResult{index: idx, fallback: sess}
+				return
+			}
+			status, body, fwdErr := o.forwardToBrowser(
+				c.Request.Context(), sess,
+				http.MethodGet, fmt.Sprintf("/v1/sessions/%s", sess.ID), nil,
+			)
+			if fwdErr != nil || status != 200 {
+				results[idx] = listResult{index: idx, fallback: sess}
+				return
+			}
+			results[idx] = listResult{index: idx, details: json.RawMessage(body)}
+		}(i, s)
+	}
+	wg.Wait()
+
+	var out []json.RawMessage
+	for _, r := range results {
+		if r.details != nil {
+			out = append(out, r.details)
+		} else {
+			// Fallback: return orchestrator data in a Steel-compatible shape.
+			fb, _ := json.Marshal(gin.H{
+				"id":         r.fallback.ID,
+				"createdAt":  r.fallback.CreatedAt,
+				"status":     r.fallback.Status,
+				"duration":   0,
+				"eventCount": 0,
+				"timeout":    r.fallback.TimeoutSeconds * 1000,
+			})
+			out = append(out, fb)
+		}
+	}
+
+	c.JSON(200, gin.H{"sessions": out, "totalCount": len(out)})
 }
 
-// GET /v1/sessions/:sessionId — Get session details as JSON.
+// GET /v1/sessions/:sessionId — Get session details.
+// Proxies to the browser pod to return the full Steel SessionDetails format.
 //
 // @Summary      Get session details
-// @Description  Returns full session data including pod name, service host, and status.
+// @Description  Returns full session data in the Steel API format.
 // @Tags         sessions
 // @Produce      json
 // @Param        sessionId  path  string  true  "Session ID"
-// @Success      200  {object}  SessionData
-// @Failure      404  {object}  map[string]string
+// @Success      200  {object}  map[string]any
+// @Failure      400  {object}  map[string]any
+// @Failure      404  {object}  map[string]any
+// @Failure      500  {object}  map[string]any
 // @Router       /sessions/{sessionId} [get]
 func (o *Orchestrator) getSessionDetails(c *gin.Context) {
 	sessionID := c.Param("sessionId")
 	session, err := o.redis.GetSession(c.Request.Context(), sessionID)
 	if err != nil {
-		c.JSON(404, gin.H{"error": "Session not found"})
+		c.JSON(404, gin.H{"message": "Session not found", "error": "Session not found"})
 		return
 	}
-	c.JSON(200, session)
+
+	if session.Status != "live" {
+		// Return a Steel-compatible response for non-live sessions.
+		c.JSON(200, gin.H{
+			"id":         session.ID,
+			"createdAt":  session.CreatedAt,
+			"status":     session.Status,
+			"duration":   0,
+			"eventCount": 0,
+			"timeout":    session.TimeoutSeconds * 1000,
+		})
+		return
+	}
+
+	// Forward to the browser pod for full Steel SessionDetails.
+	status, respBody, fwdErr := o.forwardToBrowser(
+		c.Request.Context(), session,
+		http.MethodGet, fmt.Sprintf("/v1/sessions/%s", sessionID), nil,
+	)
+	if fwdErr != nil {
+		slog.Warn("Failed to forward session details to browser pod", "error", fwdErr, "sessionId", sessionID)
+		c.JSON(500, gin.H{"message": "Browser pod unreachable", "error": fwdErr.Error()})
+		return
+	}
+
+	c.Data(status, "application/json", respBody)
 }
 
 // GET /v1/sessions/:sessionId/status — Get session status.
@@ -356,50 +490,97 @@ func (o *Orchestrator) getSessionStatus(c *gin.Context) {
 	})
 }
 
-// DELETE /v1/sessions/:sessionId — Delete a single session.
+// POST /v1/sessions/:sessionId/release — Release a single session.
+// Forwards the release to the browser pod first, then cleans up k8s resources.
 //
-// @Summary      Delete a session
-// @Description  Deletes the session, its pod, and service.
+// @Summary      Release a session
+// @Description  Releases the session, its pod, and service.
 // @Tags         sessions
 // @Produce      json
 // @Param        sessionId  path  string  true  "Session ID"
-// @Success      200  {object}  map[string]bool
-// @Router       /sessions/{sessionId} [delete]
-func (o *Orchestrator) deleteSession(c *gin.Context) {
+// @Success      200  {object}  map[string]any
+// @Failure      400  {object}  map[string]any
+// @Failure      429  {object}  map[string]any
+// @Failure      500  {object}  map[string]any
+// @Router       /sessions/{sessionId}/release [post]
+func (o *Orchestrator) releaseSession(c *gin.Context) {
 	sessionID := c.Param("sessionId")
 	session, err := o.redis.GetSession(c.Request.Context(), sessionID)
-	if err != nil {
-		c.JSON(200, gin.H{"success": true})
-		return
+
+	// Forward release to the browser pod first (if session is live).
+	if err == nil && session.Status == "live" {
+		_, respBody, fwdErr := o.forwardToBrowser(
+			c.Request.Context(), session,
+			http.MethodPost, fmt.Sprintf("/v1/sessions/%s/release", sessionID), nil,
+		)
+		if fwdErr != nil {
+			slog.Warn("Failed to forward release to browser pod", "error", fwdErr, "sessionId", sessionID)
+		}
+
+		// Clean up k8s resources regardless of browser pod response.
+		if session.ServiceName != "" {
+			o.k8s.DeleteService(c.Request.Context(), session.ServiceName)
+		}
+		if session.PodName != "" {
+			o.k8s.DeletePod(c.Request.Context(), session.PodName)
+		}
+		_ = o.redis.DeleteSession(c.Request.Context(), sessionID)
+		slog.Info("Session deleted", "sessionId", sessionID)
+
+		if fwdErr == nil {
+			c.Data(200, "application/json", respBody)
+			return
+		}
+	} else {
+		// Session not in Redis or not live — just clean up what we can.
+		if err == nil {
+			if session.ServiceName != "" {
+				o.k8s.DeleteService(c.Request.Context(), session.ServiceName)
+			}
+			if session.PodName != "" {
+				o.k8s.DeletePod(c.Request.Context(), session.PodName)
+			}
+			_ = o.redis.DeleteSession(c.Request.Context(), sessionID)
+		}
 	}
-	if session.ServiceName != "" {
-		o.k8s.DeleteService(c.Request.Context(), session.ServiceName)
-	}
-	if session.PodName != "" {
-		o.k8s.DeletePod(c.Request.Context(), session.PodName)
-	}
-	_ = o.redis.DeleteSession(c.Request.Context(), sessionID)
-	slog.Info("Session deleted", "sessionId", sessionID)
-	c.JSON(200, gin.H{"success": true})
+
+	c.JSON(200, gin.H{"success": true, "message": fmt.Sprintf("Session %s released", sessionID)})
 }
 
-// DELETE /v1/sessions — Release ALL sessions.
+// POST /v1/sessions/release — Release ALL sessions.
 //
 // @Summary      Release all sessions
-// @Description  Deletes all sessions, their pods, and services.
+// @Description  Releases all sessions, their pods, and services.
 // @Tags         sessions
 // @Produce      json
 // @Success      200  {object}  map[string]any
-// @Router       /sessions [delete]
+// @Failure      400  {object}  map[string]any
+// @Failure      500  {object}  map[string]any
+// @Router       /sessions/release [post]
 func (o *Orchestrator) releaseAllSessions(c *gin.Context) {
 	sessions, err := o.redis.ListSessions(c.Request.Context())
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		c.JSON(500, gin.H{"message": err.Error(), "error": "Failed to list sessions"})
+		return
+	}
+
+	if sessions == nil {
+		c.JSON(200, gin.H{"success": true, "message": "No sessions to release"})
 		return
 	}
 
 	deleted := 0
 	for _, s := range sessions {
+		if s.Status == "live" {
+			// Forward release to browser pod (best-effort).
+			_, _, fwdErr := o.forwardToBrowser(
+				c.Request.Context(), s,
+				http.MethodPost, fmt.Sprintf("/v1/sessions/%s/release", s.ID), nil,
+			)
+			if fwdErr != nil {
+				slog.Warn("Failed to forward release to browser pod", "error", fwdErr, "sessionId", s.ID)
+			}
+		}
 		if s.ServiceName != "" {
 			o.k8s.DeleteService(c.Request.Context(), s.ServiceName)
 		}
@@ -411,7 +592,7 @@ func (o *Orchestrator) releaseAllSessions(c *gin.Context) {
 	}
 
 	slog.Info("Released all sessions", "count", deleted)
-	c.JSON(200, gin.H{"success": true, "released": deleted})
+	c.JSON(200, gin.H{"success": true, "message": fmt.Sprintf("Released %d sessions", deleted)})
 }
 
 // GET /v1/health — Health check.
@@ -450,12 +631,10 @@ func (o *Orchestrator) health(c *gin.Context) {
 
 // ─── Warm Pool ─────────────────────────────────────────────────
 
-// claimWarmPod finds a ready prewarm pod, relabels it for the session,
+// claimWarmPodLocked finds a ready prewarm pod, relabels it for the session,
 // and returns the pod name. Returns "" if no warm pod is available.
-func (o *Orchestrator) claimWarmPod(ctx context.Context, sessionID string) string {
-	o.warmMu.Lock()
-	defer o.warmMu.Unlock()
-
+// Caller must hold warmMu.
+func (o *Orchestrator) claimWarmPodLocked(ctx context.Context, sessionID string) string {
 	prewarms, err := o.k8s.ListPrewarmPods(ctx)
 	if err != nil {
 		slog.Warn("Failed to list prewarm pods", "error", err)
@@ -579,12 +758,22 @@ func (o *Orchestrator) proxyToSession(c *gin.Context) {
 		targetURL = fmt.Sprintf("http://%s:%d", session.ServiceHost, o.config.BrowserPort)
 	}
 
+	// Build the forwarded path.
+	// Steel API endpoints go to the browser pod with the full path.
+	// CDP endpoints (/json/*, /devtools/*) go directly to Chrome on port 9223.
+	var forwardPath string
+	if isCDP {
+		forwardPath = "/" + suffix
+	} else {
+		forwardPath = fmt.Sprintf("/v1/sessions/%s/%s", sessionID, suffix)
+	}
+
 	target, _ := url.Parse(targetURL)
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
-			req.URL.Path = "/" + suffix
+			req.URL.Path = forwardPath
 			req.Host = target.Host
 			if req.Response != nil {
 				req.Response = nil
@@ -767,6 +956,7 @@ func main() {
 	// Setup Gin.
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	r.RedirectTrailingSlash = true
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
 
@@ -857,9 +1047,19 @@ func (o *Orchestrator) cleanupOrphans(ctx context.Context) {
 
 		if !exists {
 			svcName := svc.Name
-			podName := fmt.Sprintf("browser-session-%s", sessionID)
+			// Find the actual pod by sessionId label — warm pods retain their
+			// browser-warm-{shortID} name rather than the canonical browser-session-{id}.
+			pods, podErr := o.k8s.clientset.CoreV1().Pods(o.k8s.namespace).List(ctx, metav1.ListOptions{
+				LabelSelector: fmt.Sprintf("sessionId=%s", sessionID),
+			})
+			if podErr == nil {
+				for _, pod := range pods.Items {
+					o.k8s.DeletePod(ctx, pod.Name)
+				}
+			}
 			o.k8s.DeleteService(ctx, svcName)
-			o.k8s.DeletePod(ctx, podName)
+			// Remove stale entry from session index.
+			_ = o.redis.RemoveFromIndex(ctx, sessionID)
 			slog.Info("Cleaned orphaned session", "sessionId", sessionID, "service", svcName)
 		}
 	}
@@ -869,6 +1069,9 @@ func (o *Orchestrator) cleanupOrphans(ctx context.Context) {
 }
 
 func (o *Orchestrator) cleanupStalePrewarms(ctx context.Context) {
+	o.warmMu.Lock()
+	defer o.warmMu.Unlock()
+
 	pods, err := o.k8s.clientset.CoreV1().Pods(o.k8s.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=browser-session,role=prewarm",
 	})

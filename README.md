@@ -1,6 +1,6 @@
 # Steel Cluster
 
-Kubernetes-based browser session orchestrator. Creates isolated browser pods per session, routes HTTP and WebSocket (CDP) traffic, and maintains a warm pool for fast session startup.
+A simple Kubernetes-based browser session orchestrator. Creates isolated browser pods per session, routes HTTP and WebSocket (CDP) traffic, and maintains a warm pool for fast session startup (sub 150 ms).
 
 Built with **Go** (Gin + gorilla/websocket), deployed on Kubernetes with Helm.
 
@@ -50,7 +50,7 @@ docker build -t steel-web:latest ./web/
 docker build -t steel-e2e-tests:latest ./tests/
 ```
 
-### 2. Deploy to Kubernetes
+### 2. Deploy to Kubernetes in Docker running locally
 
 ```bash
 # Using raw manifests

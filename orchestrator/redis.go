@@ -41,7 +41,9 @@ func (r *RedisStore) SaveSession(ctx context.Context, session SessionData) error
 		return fmt.Errorf("redis set: %w", err)
 	}
 	// Maintain index
-	r.client.SAdd(ctx, "sessions:index", session.ID)
+	if err := r.client.SAdd(ctx, "sessions:index", session.ID).Err(); err != nil {
+		return fmt.Errorf("redis sadd: %w", err)
+	}
 	return nil
 }
 
@@ -60,8 +62,21 @@ func (r *RedisStore) GetSession(ctx context.Context, sessionID string) (SessionD
 
 func (r *RedisStore) DeleteSession(ctx context.Context, sessionID string) error {
 	key := fmt.Sprintf("session:%s", sessionID)
-	r.client.Del(ctx, key)
-	r.client.SRem(ctx, "sessions:index", sessionID)
+	if err := r.client.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("redis del: %w", err)
+	}
+	if err := r.client.SRem(ctx, "sessions:index", sessionID).Err(); err != nil {
+		return fmt.Errorf("redis srem: %w", err)
+	}
+	return nil
+}
+
+// RemoveFromIndex removes a session ID from the sessions:index set.
+// Used by the janitor to clean up stale entries whose keys have expired.
+func (r *RedisStore) RemoveFromIndex(ctx context.Context, sessionID string) error {
+	if err := r.client.SRem(ctx, "sessions:index", sessionID).Err(); err != nil {
+		return fmt.Errorf("redis srem: %w", err)
+	}
 	return nil
 }
 

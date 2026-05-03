@@ -1,20 +1,5 @@
 basePath: /v1
 definitions:
-  main.CreateSessionResponse:
-    properties:
-      error:
-        type: string
-      podName:
-        type: string
-      serviceHost:
-        type: string
-      serviceName:
-        type: string
-      sessionId:
-        type: string
-      status:
-        type: string
-    type: object
   main.HealthResponse:
     properties:
       basePath:
@@ -28,30 +13,6 @@ definitions:
       timestamp:
         type: string
       warmPoolReady:
-        type: integer
-    type: object
-  main.SessionData:
-    properties:
-      createdAt:
-        type: string
-      id:
-        type: string
-      lastUsed:
-        type: string
-      notes:
-        type: string
-      options:
-        additionalProperties: {}
-        type: object
-      podName:
-        type: string
-      serviceHost:
-        type: string
-      serviceName:
-        type: string
-      status:
-        type: string
-      timeoutSeconds:
         type: integer
     type: object
 host: localhost:3000
@@ -80,21 +41,8 @@ paths:
       tags:
       - system
   /sessions:
-    delete:
-      description: Deletes all sessions, their pods, and services.
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Release all sessions
-      tags:
-      - sessions
     get:
-      description: Returns all active and recent sessions.
+      description: Returns all active and recent sessions with full Steel API details.
       produces:
       - application/json
       responses:
@@ -120,43 +68,32 @@ paths:
       produces:
       - application/json
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Created
           schema:
-            $ref: '#/definitions/main.CreateSessionResponse'
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties: true
+            type: object
         "500":
           description: Internal Server Error
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
       summary: Create a browser session
       tags:
       - sessions
   /sessions/{sessionId}:
-    delete:
-      description: Deletes the session, its pod, and service.
-      parameters:
-      - description: Session ID
-        in: path
-        name: sessionId
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties:
-              type: boolean
-            type: object
-      summary: Delete a session
-      tags:
-      - sessions
     get:
-      description: Returns full session data including pod name, service host, and
-        status.
+      description: Returns full session data in the Steel API format.
       parameters:
       - description: Session ID
         in: path
@@ -169,14 +106,59 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/main.SessionData'
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
         "404":
           description: Not Found
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
             type: object
       summary: Get session details
+      tags:
+      - sessions
+  /sessions/{sessionId}/release:
+    post:
+      description: Releases the session, its pod, and service.
+      parameters:
+      - description: Session ID
+        in: path
+        name: sessionId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "429":
+          description: Too Many Requests
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Release a session
       tags:
       - sessions
   /sessions/{sessionId}/status:
@@ -203,6 +185,30 @@ paths:
               type: string
             type: object
       summary: Get session status
+      tags:
+      - sessions
+  /sessions/release:
+    post:
+      description: Releases all sessions, their pods, and services.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Release all sessions
       tags:
       - sessions
 swagger: "2.0"
