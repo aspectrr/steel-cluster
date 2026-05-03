@@ -127,7 +127,9 @@ func (r *RedisStore) CleanupStaleIndex(ctx context.Context) (int, error) {
 	var removed int
 	for i, cmd := range cmds {
 		if cmd.Val() == 0 {
-			r.client.SRem(ctx, "sessions:index", ids[i])
+			if err := r.client.SRem(ctx, "sessions:index", ids[i]).Err(); err != nil {
+				continue
+			}
 			removed++
 		}
 	}
