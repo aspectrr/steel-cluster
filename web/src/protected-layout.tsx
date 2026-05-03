@@ -1,7 +1,6 @@
 import { Outlet } from "react-router-dom";
 import { Header } from "@/components/header";
 import { Toaster } from "@/components/ui/toaster";
-import PostHogPageView from "./components/page-view";
 
 export default function ProtectedLayout() {
   return (
@@ -11,7 +10,6 @@ export default function ProtectedLayout() {
         <Outlet />
       </div>
       <Toaster />
-      <PostHogPageView />
     </div>
   );
 }

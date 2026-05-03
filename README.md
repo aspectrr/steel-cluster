@@ -79,6 +79,7 @@ curl http://localhost:30300/v1/health
 Navigate to **http://localhost:30301** in your browser.
 
 The Web UI lets you:
+
 - View all active sessions
 - Create new browser sessions
 - See session details, pod info, and connection URLs
@@ -291,11 +292,11 @@ steel-cluster/
 
 ## Port Reference
 
-| Port  | Service              | URL                              |
-| ----- | -------------------- | -------------------------------- |
-| 30300 | Orchestrator (NodePort) | http://localhost:30300/v1/health |
-| 30301 | Web UI (NodePort)     | http://localhost:30301           |
-| 30300 | API Docs              | http://localhost:30300/documentation |
+| Port  | Service                 | URL                                  |
+| ----- | ----------------------- | ------------------------------------ |
+| 30300 | Orchestrator (NodePort) | http://localhost:30300/v1/health     |
+| 30301 | Web UI (NodePort)       | http://localhost:30301               |
+| 30300 | API Docs                | http://localhost:30300/documentation |
 
 ## Configuration
 
