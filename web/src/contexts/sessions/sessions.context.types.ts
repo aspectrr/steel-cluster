@@ -11,7 +11,8 @@ import {
   // GetSessionEventsResponse,
   // GetSessionLogsResponse,
   // OrganizationDetailsResponse,
-  // ReleaseSessionResponse,
+  ReleaseSessionResponse,
+  releaseSession,
   SessionResponse,
   SessionsResponse,
   // UsageDetailsResponse,
@@ -34,12 +35,12 @@ export type SessionsContextType = {
     CreateSessionRequest,
     unknown
   >;
-  // useReleaseSessionMutation: () => UseMutationResult<
-  //   ReleaseSessionResponse,
-  //   ErrorResponse,
-  //   string,
-  //   unknown
-  // >;
+  releaseSession: () => UseMutationResult<
+    ReleaseSessionResponse,
+    ErrorResponse,
+    string,
+    unknown
+  >;
   useSession: (
     id: string,
   ) => UseQueryResult<SessionResponse | null, ErrorResponseWithStatus>;

@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: steel-e2e-tests
+  namespace: browser-sessions
+  labels:
+    app: steel-e2e-tests
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: test
+          image: steel-e2e-tests:latest
+          imagePullPolicy: Never
+          env:
+            - name: ORCHESTRATOR_URL
+              value: "http://browser-orchestrator:3000"

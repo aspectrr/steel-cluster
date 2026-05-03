@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ws-test-server
+  namespace: browser-sessions
+  labels:
+    app: ws-test-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ws-test-server
+  template:
+    metadata:
+      labels:
+        app: ws-test-server
+    spec:
+      containers:
+        - name: server
+          image: steel-e2e-tests:latest
+          imagePullPolicy: Never
+          command: ["npx", "tsx", "ws-test-server.ts"]
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3099
+            initialDelaySeconds: 2
+            periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ws-test-server
+  namespace: browser-sessions
+spec:
+  selector:
+    app: ws-test-server
+  ports:
+    - port: 3099
+      targetPort: 3099
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ws-test-client
+  namespace: browser-sessions
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: client
+          image: steel-e2e-tests:latest
+          imagePullPolicy: Never
+          command: ["npx", "tsx", "ws-test-client.ts"]
+          env:
+            - name: WS_URL
+              value: "ws://ws-test-server:3099"

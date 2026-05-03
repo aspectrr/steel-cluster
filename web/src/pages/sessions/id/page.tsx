@@ -14,6 +14,7 @@ export function SessionPage() {
   const { id } = useParams();
   const { useSession } = useSessionsContext();
   const { data: session, isLoading, isError, error } = useSession(id!);
+  console.log(session);
   const [showConsole, setShowConsole] = useState(true);
 
   if (isLoading)

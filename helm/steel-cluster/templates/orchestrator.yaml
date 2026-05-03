@@ -34,6 +34,9 @@ spec:
         - name: orchestrator
           image: {{ $image | quote }}
           imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+{{- if .Values.orchestrator.command }}
+          command: {{ .Values.orchestrator.command | toJson }}
+{{- end }}
           ports:
             - name: {{ .Values.orchestrator.service.portName | default "http" }}
               containerPort: {{ .Values.orchestrator.service.targetPort }}

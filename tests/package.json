@@ -1,0 +1,19 @@
+{
+  "name": "steel-cluster-e2e-tests",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "End-to-end tests for Steel Cluster orchestrator + browser sessions",
+  "scripts": {
+    "test": "tsx e2e.test.ts",
+    "test:scrape": "tsx hacker-news.test.ts"
+  },
+  "dependencies": {
+    "puppeteer-core": "^23.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.6.3"
+  }
+}
