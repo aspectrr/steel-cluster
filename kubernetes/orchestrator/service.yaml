@@ -4,9 +4,10 @@ metadata:
   name: browser-orchestrator
   namespace: browser-sessions
 spec:
+  type: NodePort
   selector:
     app: browser-orchestrator
   ports:
     - port: 3000
       targetPort: 3000
-  type: ClusterIP
+      nodePort: 30080

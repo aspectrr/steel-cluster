@@ -10,26 +10,26 @@ import { WebSocketProvider } from "./contexts/websocket/websocket-context";
 import { queryClient } from "./lib/query-client";
 
 export default function RootLayout() {
-  return (
-    <ErrorBoundary level="page" context="root-providers">
-      <QueryClientProvider client={queryClient}>
-        <ErrorBoundary level="section" context="websocket-provider">
-          <WebSocketProvider authToken={""} refreshToken={() => ""}>
-            <ErrorBoundary level="section" context="session-providers">
-              <SessionStateProvider>
-                <SessionsProvider>
-                  <ThemeProvider
-                    defaultTheme="dark"
-                    storageKey="steel-ui-theme"
-                  >
-                    <Outlet />
-                  </ThemeProvider>
-                </SessionsProvider>
-              </SessionStateProvider>
-            </ErrorBoundary>
-          </WebSocketProvider>
-        </ErrorBoundary>
-      </QueryClientProvider>
-    </ErrorBoundary>
-  );
+	return (
+		<ErrorBoundary level="page" context="root-providers">
+			<QueryClientProvider client={queryClient}>
+				<ErrorBoundary level="section" context="websocket-provider">
+					<WebSocketProvider authToken={""} refreshToken={() => ""}>
+						<ErrorBoundary level="section" context="session-providers">
+							<SessionStateProvider>
+								<SessionsProvider>
+									<ThemeProvider
+										defaultTheme="dark"
+										storageKey="steel-ui-theme"
+									>
+										<Outlet />
+									</ThemeProvider>
+								</SessionsProvider>
+							</SessionStateProvider>
+						</ErrorBoundary>
+					</WebSocketProvider>
+				</ErrorBoundary>
+			</QueryClientProvider>
+		</ErrorBoundary>
+	);
 }
