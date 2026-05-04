@@ -3,7 +3,7 @@
 # ─── Config ──────────────────────────────────────────────
 
 BINARY     := bin/orchestrator
-IMAGE      := browser-orchestrator
+IMAGE      := ghcr.io/aspectrr/steel-orchestrator
 TAG        := latest
 NAMESPACE  := browser-sessions
 PORT       := 30300
@@ -40,17 +40,15 @@ docker-push:
 # ─── Kubernetes ──────────────────────────────────────────
 
 deploy: docker-build
-	kubectl apply -f ../kubernetes/namespace.yaml
-	kubectl apply -f ../kubernetes/rbac/
-	kubectl apply -f ../kubernetes/redis/
-	kubectl apply -f ../kubernetes/orchestrator/
-	kubectl rollout status deployment/browser-orchestrator -n $(NAMESPACE) --timeout=60s
+	helm upgrade --install steel-cluster ../helm/steel-cluster \
+	  --namespace $(NAMESPACE) --create-namespace \
+	  --set orchestrator.image.pullPolicy=IfNotPresent \
+	  --set web.image.pullPolicy=IfNotPresent
+	kubectl rollout status deployment/browser-orchestrator -n $(NAMESPACE) --timeout=120s
 
 undeploy:
-	kubectl delete -f ../kubernetes/orchestrator/ --ignore-not-found
-	kubectl delete -f ../kubernetes/redis/ --ignore-not-found
-	kubectl delete -f ../kubernetes/rbac/ --ignore-not-found
-	kubectl delete -f ../kubernetes/namespace.yaml --ignore-not-found
+	helm uninstall steel-cluster -n $(NAMESPACE) || true
+	kubectl delete namespace $(NAMESPACE) --ignore-not-found
 
 # ─── E2E Tests ──────────────────────────────────────────
 
