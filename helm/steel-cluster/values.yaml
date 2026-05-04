@@ -40,7 +40,7 @@ orchestrator:
     create: true
 
   service:
-    type: ClusterIP
+    type: LoadBalancer
     port: 3000
     targetPort: 3000
     # Name of the service port (also used by ServiceMonitor)
@@ -363,8 +363,8 @@ web:
   replicas: 1
 
   service:
-    type: ClusterIP
-    port: 3001
+    type: LoadBalancer
+    port: 5173
     targetPort: 3001
     # Name of the service port
     portName: http
