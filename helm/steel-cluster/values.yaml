@@ -196,7 +196,7 @@ ingress:
 monitoring:
   # ServiceMonitor resource (Prometheus Operator CRD required)
   serviceMonitor:
-    enabled: true
+    enabled: false
     # Additional labels for the ServiceMonitor
     labels: {}
     # Named port to scrape from the orchestrator service
