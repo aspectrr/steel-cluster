@@ -2,9 +2,7 @@
 # This file controls configurable parameters for deploying:
 # - Browser Orchestrator
 # - Redis
-# - Prometheus
-# - Grafana
-# - Ingress and basic monitoring objects
+# - Ingress
 
 global:
   # Optional image pull secrets for all workloads
@@ -47,11 +45,8 @@ orchestrator:
     portName: http
     annotations: {}
 
-  # Pod annotations (you can enable Prometheus pod scraping if needed)
-  podAnnotations:
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "3000"
-    prometheus.io/path: "/metrics"
+  # Pod annotations
+  podAnnotations: {}
 
   # Container environment variables for the Go orchestrator
   env:
@@ -158,18 +153,6 @@ ingress:
   hosts:
     - host: localhost
       paths:
-        # Subpath for Grafana
-        - path: /grafana
-          pathType: Prefix
-          service:
-            name: grafana
-            port: 3000
-        # Subpath for Prometheus
-        - path: /prometheus
-          pathType: Prefix
-          service:
-            name: prometheus
-            port: 9090
         # Subpath for Web UI
         - path: /web
           pathType: Prefix
@@ -192,164 +175,6 @@ ingress:
   # - secretName: steel-cluster-tls
   #   hosts:
   #     - your.domain.tld
-
-monitoring:
-  # ServiceMonitor resource (Prometheus Operator CRD required)
-  serviceMonitor:
-    enabled: false
-    # Additional labels for the ServiceMonitor
-    labels: {}
-    # Named port to scrape from the orchestrator service
-    portName: http
-    path: /metrics
-    interval: 30s
-    scrapeTimeout: 10s
-
-prometheus:
-  enabled: true
-  name: prometheus
-
-  image:
-    repository: prom/prometheus
-    tag: v3.4.2
-    pullPolicy: IfNotPresent
-
-  serviceAccount:
-    create: true
-    name: prometheus
-    annotations: {}
-
-  rbac:
-    # Creates ClusterRole and ClusterRoleBinding for Prometheus scraping
-    create: true
-
-  service:
-    type: ClusterIP
-    port: 9090
-    targetPort: 9090
-    annotations: {}
-
-  # Prometheus web configuration
-  web:
-    # External URL subpath (used behind ingress subpath)
-    externalUrl: /prometheus
-    # Retention time for TSDB
-    retention: 200h
-
-  # Scrape configuration defaults
-  scrape:
-    globalScrapeInterval: 15s
-    globalEvaluationInterval: 15s
-    # Static scrape target for orchestrator service
-    orchestrator:
-      enabled: true
-      serviceName: browser-orchestrator
-      servicePort: 3000
-      metricsPath: /metrics
-      scrapeInterval: 15s
-    # Enables Kubernetes pods discovery in the release namespace with prometheus.io annotations
-    kubernetesPods:
-      enabled: true
-      namespaces:
-        - browser-sessions
-
-  # Storage: default emptyDir; set persistence.enabled=true for PVC
-  storage:
-    persistence:
-      enabled: false
-      size: 5Gi
-      storageClass: ""
-      accessModes:
-        - ReadWriteOnce
-
-  resources:
-    requests:
-      memory: "512Mi"
-      cpu: "200m"
-    limits:
-      memory: "1Gi"
-      cpu: "500m"
-
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-
-alerts:
-  enabled: true
-  rules:
-    highSessionCount:
-      enabled: true
-      threshold: 80
-      for: 5m
-      severity: warning
-    sessionCreationFailure:
-      enabled: true
-      increaseWindow: 5m
-      threshold: 5
-      for: 2m
-      severity: critical
-    orchestratorDown:
-      enabled: true
-      for: 1m
-      severity: critical
-    redisDown:
-      enabled: true
-      for: 1m
-      severity: critical
-
-grafana:
-  enabled: true
-  name: grafana
-
-  image:
-    repository: grafana/grafana
-    tag: "12.0.2"
-    pullPolicy: IfNotPresent
-
-  service:
-    type: ClusterIP
-    port: 3000
-    targetPort: 3000
-    annotations: {}
-
-  admin:
-    # WARNING: Change for production!
-    password: admin123
-
-  plugins:
-    # Install the pie chart plugin used by the default dashboard
-    - grafana-piechart-panel
-
-  # Serve grafana from subpath when behind ingress at /grafana
-  server:
-    rootUrl: "%(protocol)s://%(domain)s/grafana"
-    serveFromSubPath: true
-    subPath: /grafana
-
-  datasources:
-    prometheus:
-      # URL to Prometheus service inside the cluster
-      url: http://prometheus:9090
-      isDefault: true
-
-  # Dashboard provisioning
-  dashboards:
-    enabled: true
-    # leave as-is to use the provided dashboard
-    browserSessions:
-      enabled: true
-
-  resources:
-    requests:
-      memory: "256Mi"
-      cpu: "100m"
-    limits:
-      memory: "512Mi"
-      cpu: "200m"
-
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
 
 web:
   enabled: true
