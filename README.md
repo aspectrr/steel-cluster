@@ -267,10 +267,8 @@ steel-cluster/
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   └── templates/
-├── kubernetes/                # Raw K8s manifests
+├── tests/                     # E2E tests (Puppeteer)
 └── scripts/
-    ├── deploy.sh
-    └── cleanup.sh
 ```
 
 ## Port Reference

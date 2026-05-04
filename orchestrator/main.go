@@ -149,10 +149,10 @@ func (o *Orchestrator) RegisterRoutes(r *gin.Engine) {
 
 	// Individual session routes.
 	v1.GET("/sessions/:sessionId", o.getSessionDetails)
-	v1.GET("/sessions/:sessionId/status", o.getSessionStatus)
-	v1.POST("/sessions/:sessionId/release", o.releaseSession)
 
 	// Proxy catch-all (all methods, remaining paths).
+	// /status and /release are dispatched from inside proxyToSession
+	// because Gin's radix tree cannot coexist with a wildcard at the same level.
 	v1.Any("/sessions/:sessionId/*path", o.proxyToSession)
 }
 
@@ -736,6 +736,20 @@ func (o *Orchestrator) proxyToSession(c *gin.Context) {
 		return
 	}
 
+	suffix := c.Param("path")
+	suffix = strings.TrimPrefix(suffix, "/")
+
+	// Dispatch non-proxy sub-routes that Gin can't register separately
+	// due to wildcard conflicts in the radix tree.
+	switch {
+	case suffix == "status" && c.Request.Method == http.MethodGet:
+		o.getSessionStatus(c)
+		return
+	case suffix == "release" && c.Request.Method == http.MethodPost:
+		o.releaseSession(c)
+		return
+	}
+
 	// Touch session.
 	session.LastUsed = time.Now().UTC().Format(time.RFC3339)
 	_ = o.redis.SaveSession(c.Request.Context(), session)
@@ -744,9 +758,6 @@ func (o *Orchestrator) proxyToSession(c *gin.Context) {
 		c.JSON(409, gin.H{"error": fmt.Sprintf("Session not ready: %s", session.Status)})
 		return
 	}
-
-	suffix := c.Param("path")
-	suffix = strings.TrimPrefix(suffix, "/")
 
 	// CDP endpoints (/json/*, /devtools/*) go to port 9223 via pod IP.
 	isCDP := strings.HasPrefix(suffix, "json/") || strings.HasPrefix(suffix, "devtools/")

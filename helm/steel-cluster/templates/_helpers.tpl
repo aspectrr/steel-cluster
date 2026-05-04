@@ -84,15 +84,6 @@ imagePullSecrets:
 {{- end -}}
 {{- end -}}
 
-{{/* Prometheus ServiceAccount name helper */}}
-{{- define "steel-cluster.prometheus.serviceAccountName" -}}
-{{- if .Values.prometheus.serviceAccount.create -}}
-{{- default "prometheus" .Values.prometheus.serviceAccount.name -}}
-{{- else -}}
-{{- default "default" .Values.prometheus.serviceAccount.name -}}
-{{- end -}}
-{{- end -}}
-
 {{/* Resolve the Kubernetes namespace value used by app logic (env K8S_NAMESPACE) */}}
 {{- define "steel-cluster.k8sNamespace" -}}
 {{- if .Values.orchestrator.env.K8S_NAMESPACE -}}
