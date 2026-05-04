@@ -24,10 +24,9 @@ orchestrator:
   name: browser-orchestrator
 
   image:
-    repository: browser-orchestrator
+    repository: ghcr.io/aspectrr/steel-orchestrator
     tag: latest
-    # If using a locally built image (e.g., kind/k3d), you may set Never
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
   replicas: 1
 
@@ -353,14 +352,13 @@ grafana:
   affinity: {}
 
 web:
-  enabled: false
+  enabled: true
   name: steel-web
 
   image:
-    repository: steel-web
+    repository: ghcr.io/aspectrr/steel-web
     tag: latest
-    # If using a locally built image (e.g., kind/k3d), you may set Never
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
   replicas: 1
 
