@@ -27,6 +27,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Login to GHCR for Helm
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -34,3 +37,12 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package and push Helm chart
+        run: |
+          # Strip the leading 'v' from the tag for semver compatibility
+          CHART_VERSION="${GITHUB_REF_NAME#v}"
+          helm package ./helm/steel-cluster \
+            --app-version "${GITHUB_REF_NAME}" \
+            --version "${CHART_VERSION}"
+          helm push steel-cluster-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts

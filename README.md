@@ -1,6 +1,6 @@
 # Steel Cluster
 
-A simple Kubernetes-based browser session orchestrator. Creates isolated browser pods per session, routes HTTP and WebSocket (CDP) traffic, and maintains a warm pool for fast session startup (sub 150 ms).
+A Kubernetes-based browser session orchestrator. Creates isolated browser pods per session, routes HTTP and WebSocket (CDP) traffic, and maintains a warm pool for fast session startup (~85ms).
 
 Built with **Go** (Gin + gorilla/websocket), deployed on Kubernetes with Helm.
 
@@ -31,65 +31,91 @@ Built with **Go** (Gin + gorilla/websocket), deployed on Kubernetes with Helm.
 4. WebSocket CDP connections (Puppeteer, Playwright) are bidirectionally relayed through the orchestrator
 5. Background janitor cleans up orphaned resources; warm pool maintainer keeps pre-warmed pods ready
 
-## Quick Start
+---
+
+## Getting Started
 
 ### Prerequisites
 
-- Docker Desktop with Kubernetes enabled (or any K8s cluster)
-- `kubectl`, `helm`, `go` 1.22+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Kubernetes enabled (or any K8s cluster)
+- [`kubectl`](https://kubernetes.io/docs/tasks/tools/) and [`helm`](https://helm.sh/docs/intro/install/)
 
-### 1. Clone & Build
+#### Enable Kubernetes in Docker Desktop
 
-```bash
-git clone https://github.com/aspectrr/steel-cluster.git
-cd steel-cluster
+1. Open Docker Desktop → **Settings** → **Kubernetes**
+2. Check **Enable Kubernetes**
+3. Click **Apply & Restart**
+4. Wait for the green indicator in the bottom-left corner
+5. Verify: `kubectl get nodes` should show a `Ready` node
 
-# Build all images
-docker build -t browser-orchestrator:latest ./orchestrator/
-docker build -t steel-web:latest ./web/
-docker build -t steel-e2e-tests:latest ./tests/
-```
-
-### 2. Deploy to Kubernetes in Docker running locally
+### Install (one command)
 
 ```bash
-# Using raw manifests
-kubectl apply -f kubernetes/namespace.yaml
-kubectl apply -f kubernetes/rbac/
-kubectl apply -f kubernetes/redis/
-kubectl apply -f kubernetes/orchestrator/
-kubectl apply -f kubernetes/web/
-
-# Or with Helm
-helm install steel-cluster ./helm/steel-cluster/ \
+helm install steel-cluster oci://ghcr.io/aspectrr/charts/steel-cluster \
   --namespace browser-sessions \
-  --create-namespace \
-  --set orchestrator.image.pullPolicy=Never
+  --create-namespace
 ```
 
-### 3. Verify
+That's it. This pulls pre-built images from GitHub Container Registry and deploys everything — orchestrator, web UI, Redis, monitoring — into your cluster.
+
+### Verify
 
 ```bash
 kubectl get pods -n browser-sessions
 curl http://localhost:3000/v1/health
 ```
 
-### 4. Open the Web UI
+### Open the Web UI
 
 Navigate to **http://localhost:5173** in your browser.
 
-The Web UI lets you:
+From the Web UI you can:
 
 - View all active sessions
-- Create new browser sessions
+- Create new browser sessions (near-instant from warm pool)
 - See session details, pod info, and connection URLs
 - Delete sessions
 
-API requests from the Web UI are proxied through nginx to the orchestrator at `localhost:3000`.
+### Uninstall
+
+```bash
+helm uninstall steel-cluster -n browser-sessions
+kubectl delete namespace browser-sessions
+```
+
+---
+
+## Deploying from Source
+
+If you want to build images locally (for development or contributions):
+
+```bash
+git clone https://github.com/aspectrr/steel-cluster.git
+cd steel-cluster
+
+# Build images
+docker build -t ghcr.io/aspectrr/steel-orchestrator:latest ./orchestrator/
+docker build -t ghcr.io/aspectrr/steel-web:latest ./web/
+
+# Deploy with Helm (use IfNotPresent to prefer your local build)
+helm upgrade --install steel-cluster ./helm/steel-cluster \
+  --namespace browser-sessions \
+  --create-namespace \
+  --set orchestrator.image.pullPolicy=IfNotPresent \
+  --set web.image.pullPolicy=IfNotPresent
+```
+
+Or use the deploy script (builds images + installs ingress + deploys chart):
+
+```bash
+./scripts/deploy.sh
+```
+
+---
 
 ## API Reference
 
-Interactive docs available at `/documentation` (Scalar UI) when the orchestrator is running.
+Interactive docs available at **http://localhost:3000/documentation** (Scalar UI) when the orchestrator is running.
 
 **Regenerate the OpenAPI spec after code changes:**
 
@@ -166,18 +192,7 @@ const title = await page.$eval(".titleline > a", (el) => el.textContent);
 curl http://localhost:3000/v1/health
 ```
 
-Response:
-
-```json
-{
-  "status": "ok",
-  "sessions": 0,
-  "warmPoolReady": 2,
-  "namespace": "browser-sessions",
-  "basePath": "",
-  "timestamp": "2026-05-03T00:42:50Z"
-}
-```
+---
 
 ## Warm Browser Pool
 
@@ -188,25 +203,11 @@ The orchestrator maintains a configurable pool of pre-warmed browser pods for ne
 - **Auto-replenishment**: Background goroutine maintains pool size, creating replacement pods when claimed
 - **Stale cleanup**: Prewarm pods running >30 minutes without being claimed are automatically deleted
 
-**How it works:**
+---
 
-1. On startup, the orchestrator seeds the warm pool to target size
-2. A background goroutine checks every 10 seconds and creates replacement pods
-3. When a session is created, a ready warm pod is claimed, relabeled, and assigned to the session
-4. A replacement warm pod is spawned in the background
+## Testing
 
-## Testing Locally
-
-### Web UI (http://localhost:5173)
-
-1. Deploy everything (see Quick Start)
-2. Open **http://localhost:5173** in your browser
-3. Click "Create Session" — should be near-instant from warm pool
-4. See the session appear in the list with its ID, status, and pod name
-5. Click a session to see details
-6. Click "Delete" to tear down a session and its browser pod
-
-### API with curl (http://localhost:3000)
+### API with curl
 
 ```bash
 # Create a session
@@ -223,24 +224,14 @@ curl -s http://localhost:3000/v1/sessions | python3 -m json.tool
 curl -X DELETE http://localhost:3000/v1/sessions/$SESSION
 ```
 
-### API Docs (http://localhost:3000/documentation)
-
-Open **http://localhost:3000/documentation** for the interactive Scalar API docs.
-
 ### E2E Tests
 
-### Running E2E Tests
-
-Tests run as Kubernetes Jobs inside the cluster (not via port-forward) for reliable WebSocket connectivity:
+Tests run as Kubernetes Jobs inside the cluster for reliable WebSocket connectivity:
 
 ```bash
-# Build the test image
+# Build and run
 docker build -t steel-e2e-tests:latest ./tests/
-
-# Run the test job
 kubectl apply -f tests/job.yaml
-
-# Watch results
 kubectl logs -f job/steel-e2e-tests -n browser-sessions
 
 # Clean up
@@ -251,6 +242,8 @@ kubectl delete job steel-e2e-tests -n browser-sessions
 
 - Single session: Creates session, connects Puppeteer via CDP, scrapes top 5 Hacker News stories
 - 3 concurrent sessions: Creates 3 sessions in parallel, each scrapes different pages, verifies isolation
+
+---
 
 ## Project Structure
 
@@ -263,28 +256,18 @@ steel-cluster/
 │   ├── helpers.go             # CORS middleware, response helpers
 │   ├── Makefile               # Build, deploy, test commands
 │   ├── docs/                  # Generated OpenAPI spec (swag)
-│   │   ├── swagger.json
-│   │   ├── swagger.yaml
-│   │   └── docs.go
-│   └── Dockerfile
-├── tests/                     # E2E tests (Puppeteer)
-│   ├── e2e.test.ts            # Main test suite
-│   ├── job.yaml               # K8s Job manifest
 │   └── Dockerfile
 ├── web/                       # Web UI (React + Vite + nginx)
-│   ├── Dockerfile             # Multi-stage: build + nginx with API proxy
-│   └── src/
-├── helm/                      # Helm chart
-│   └── steel-cluster/
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
+│   └── Dockerfile             # Multi-stage: build + nginx with API proxy
+├── tests/                     # E2E tests (Puppeteer)
+│   ├── e2e.test.ts
+│   ├── job.yaml
+│   └── Dockerfile
+├── helm/steel-cluster/        # Helm chart
+│   ├── Chart.yaml
+│   ├── values.yaml
+│   └── templates/
 ├── kubernetes/                # Raw K8s manifests
-│   ├── namespace.yaml
-│   ├── rbac/
-│   ├── redis/
-│   ├── orchestrator/
-│   └── web/
 └── scripts/
     ├── deploy.sh
     └── cleanup.sh
@@ -292,11 +275,11 @@ steel-cluster/
 
 ## Port Reference
 
-| Port  | Service                 | URL                                  |
-| ----- | ----------------------- | ------------------------------------ |
-| 30300 | Orchestrator (NodePort) | http://localhost:3000/v1/health     |
-| 30301 | Web UI (NodePort)       | http://localhost:5173               |
-| 30300 | API Docs                | http://localhost:3000/documentation |
+| Port | Service      | URL                                 |
+| ---- | ------------ | ----------------------------------- |
+| 3000 | Orchestrator | http://localhost:3000/v1/health     |
+| 3000 | API Docs     | http://localhost:3000/documentation |
+| 5173 | Web UI       | http://localhost:5173               |
 
 ## Configuration
 

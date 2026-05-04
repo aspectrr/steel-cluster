@@ -4,19 +4,19 @@ set -euo pipefail
 
 echo "Deploying Browser Session Orchestrator with Helm..."
 
-# Build local orchestrator image (Docker Desktop makes it available to the cluster)
+# Build local images (Docker Desktop makes them available to the cluster)
 echo "Building Orchestrator Docker image..."
-docker build -t browser-orchestrator:latest ./orchestrator/
+docker build -t ghcr.io/aspectrr/steel-orchestrator:latest ./orchestrator/
 
-# echo "Building Web Docker image..."
-# # docker build -t steel-web:latest ./web/
+echo "Building Web Docker image..."
+docker build -t ghcr.io/aspectrr/steel-web:latest ./web/
 
 # Install/upgrade NGINX Ingress controller
 echo "Installing/Upgrading Ingress-NGINX controller..."
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx >/dev/null 2>&1 || true
 helm repo update >/dev/null
 helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
-  --namespace ingress-nginx --create-namespace
+	--namespace ingress-nginx --create-namespace
 
 echo "Waiting for Ingress-NGINX controller to be ready..."
 kubectl -n ingress-nginx wait --for=condition=available --timeout=300s deployment/ingress-nginx-controller
@@ -24,12 +24,11 @@ kubectl -n ingress-nginx wait --for=condition=available --timeout=300s deploymen
 # Install/upgrade the steel-cluster Helm chart
 echo "Installing/Upgrading steel-cluster chart..."
 helm upgrade --install steel-cluster ./helm/steel-cluster \
-  --namespace browser-sessions --create-namespace \
-  --set namespace.create=false \
-  --set orchestrator.image.repository=browser-orchestrator \
-  --set orchestrator.image.tag=latest \
-  --set orchestrator.image.pullPolicy=IfNotPresent \
-  --set monitoring.serviceMonitor.enabled=false
+	--namespace browser-sessions --create-namespace \
+	--set namespace.create=false \
+	--set orchestrator.image.pullPolicy=IfNotPresent \
+	--set web.image.pullPolicy=IfNotPresent \
+	--set monitoring.serviceMonitor.enabled=false
 
 # Wait for core components to be ready
 echo "Waiting for Redis to be ready..."
@@ -44,8 +43,8 @@ kubectl -n browser-sessions wait --for=condition=available --timeout=300s deploy
 echo "Waiting for Browser Orchestrator to be ready..."
 kubectl -n browser-sessions wait --for=condition=available --timeout=300s deployment/browser-orchestrator
 
-# echo "Waiting for Web to be ready..."
-# kubectl -n browser-sessions wait --for=condition=available --timeout=300s deployment/steel-web
+echo "Waiting for Web UI to be ready..."
+kubectl -n browser-sessions wait --for=condition=available --timeout=300s deployment/steel-web
 
 echo "Deployment complete!"
 
@@ -57,7 +56,7 @@ kubectl get ingress -n browser-sessions || true
 echo ""
 echo "Endpoints:"
 echo "- Orchestrator: http://localhost/api"
-# echo "- Web:          http://localhost/web"
+echo "- Web UI:       http://localhost:5173"
 echo "- Grafana:      http://localhost/grafana  (username: admin, password from values)"
 echo "- Prometheus:   http://localhost/prometheus"
 echo ""
